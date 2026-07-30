@@ -81,7 +81,10 @@ jobs:
           git -C "$RUNNER_TEMP/linux" apply --check "$GITHUB_WORKSPACE/kernel/0001-input-elan-i2c-add-in-place-recovery.patch"
           git -C "$RUNNER_TEMP/linux" apply "$GITHUB_WORKSPACE/kernel/0001-input-elan-i2c-add-in-place-recovery.patch"
           make -C "$RUNNER_TEMP/linux" defconfig
-          make -C "$RUNNER_TEMP/linux" -j2 drivers/input/mouse/elan_i2c_core.o
+          make -C "$RUNNER_TEMP/linux" -j2 \
+            drivers/input/mouse/elan_i2c_core.o \
+            drivers/input/mouse/elan_i2c_i2c.o \
+            drivers/input/mouse/elan_i2c_smbus.o
       - name: Compile and link Rust-core module
         run: |
           make -C kernel/rust-shim clean KDIR="$RUNNER_TEMP/linux"

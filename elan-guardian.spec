@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.2.0
+Version:        0.2.1
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -36,6 +36,8 @@ install -Dm755 target/release/elan-trace-score %{buildroot}%{_bindir}/elan-trace
 install -Dm644 packaging/elan-guardian.8 %{buildroot}%{_mandir}/man8/elan-guardian.8
 install -Dm644 systemd/elan-guardian-resume.service \
     %{buildroot}%{_unitdir}/elan-guardian-resume.service
+install -Dm644 systemd/elan-guardian-watch.service \
+    %{buildroot}%{_unitdir}/elan-guardian-watch.service
 install -Dm644 systemd/91-elan-guardian.preset \
     %{buildroot}%{_presetdir}/91-elan-guardian.preset
 install -Dm644 formal/agda/ElanGuardian.agda \
@@ -63,12 +65,15 @@ done
 
 %post
 %systemd_post elan-guardian-resume.service
+%systemd_post elan-guardian-watch.service
 
 %preun
 %systemd_preun elan-guardian-resume.service
+%systemd_preun elan-guardian-watch.service
 
 %postun
 %systemd_postun_with_restart elan-guardian-resume.service
+%systemd_postun_with_restart elan-guardian-watch.service
 
 %check
 CARGO_NET_OFFLINE=true cargo test --frozen --all-targets
@@ -85,9 +90,15 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_bindir}/elan-trace-score
 %{_mandir}/man8/elan-guardian.8*
 %{_unitdir}/elan-guardian-resume.service
+%{_unitdir}/elan-guardian-watch.service
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
+* Thu Jul 30 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.1-1
+- Rebind automatically when an in-place kernel recovery does not restore input
+- Write sysfs control commands atomically instead of splitting the newline
+- Add a non-grabbing recovery monitor for affected ThinkPad P53 systems
+
 * Thu Jul 30 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.0-1
 - Add a no_std Rust data and recovery core for the elan_i2c kernel module
 - Keep Linux I2C, input, IRQ, power, and registration calls behind a C shim

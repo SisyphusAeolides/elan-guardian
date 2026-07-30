@@ -8,6 +8,7 @@ pub mod irq;
 pub mod policy;
 pub mod recover;
 pub mod trace;
+pub mod watch;
 
 pub use device::{affected_thinkpad_p53, discover, Controller};
 pub use diagnose::{analyze_trace, Diagnosis, DiagnosisKind};

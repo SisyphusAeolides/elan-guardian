@@ -37,11 +37,14 @@ pub fn discover(sysfs_root: &Path) -> io::Result<Vec<Controller>> {
         controllers.push(Controller {
             id: id.clone(),
             sysfs_path: path.clone(),
-            product_id: read_trimmed(path.join("product_id")),
-            firmware_version: read_trimmed(path.join("firmware_version")),
-            sample_version: read_trimmed(path.join("sample_version")),
-            iap_version: read_trimmed(path.join("iap_version")),
-            mode: read_trimmed(path.join("mode")),
+            // These elan_i2c attributes issue live transport requests when read.
+            // Runtime discovery must stay passive: polling them can repeatedly
+            // exercise a wedged SMBus controller and make the input outage worse.
+            product_id: None,
+            firmware_version: None,
+            sample_version: None,
+            iap_version: None,
+            mode: None,
             runtime_watchdog: read_trimmed(path.join("runtime_watchdog")),
             irq: read_trimmed(path.join("irq")).and_then(|value| value.parse().ok()),
             event_nodes: event_nodes(&path),
@@ -115,7 +118,9 @@ fn read_trimmed(path: PathBuf) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_i2c_id;
+    use super::{discover, valid_i2c_id};
+    use std::fs;
+    use std::os::unix::fs::symlink;
 
     #[test]
     fn accepts_only_canonical_i2c_identifiers() {
@@ -124,5 +129,31 @@ mod tests {
         assert!(!valid_i2c_id("../elan_i2c"));
         assert!(!valid_i2c_id("7-15"));
         assert!(!valid_i2c_id("i2c-7-0015"));
+    }
+
+    #[test]
+    fn runtime_discovery_does_not_probe_transport_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "elan-guardian-discovery-test-{}",
+            std::process::id()
+        ));
+        let driver = root.join("bus/i2c/drivers/elan_i2c");
+        let device = root.join("bus/i2c/devices/7-0015");
+        fs::create_dir_all(device.join("input/input0/event1")).unwrap();
+        fs::create_dir_all(&driver).unwrap();
+        symlink(&driver, device.join("driver")).unwrap();
+        symlink(&device, driver.join("7-0015")).unwrap();
+        fs::write(device.join("firmware_version"), "116\n").unwrap();
+        fs::write(device.join("runtime_watchdog"), "enabled=1 recoveries=0\n").unwrap();
+
+        let controllers = discover(&root).unwrap();
+        assert_eq!(controllers.len(), 1);
+        assert_eq!(controllers[0].firmware_version, None);
+        assert_eq!(
+            controllers[0].runtime_watchdog.as_deref(),
+            Some("enabled=1 recoveries=0")
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

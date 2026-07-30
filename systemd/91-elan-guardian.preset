@@ -1,1 +1,2 @@
 enable elan-guardian-resume.service
+enable elan-guardian-watch.service

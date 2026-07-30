@@ -1,4 +1,4 @@
-.TH ELAN-GUARDIAN 8 "July 2026" "elan-guardian 0.2.0" "System Administration"
+.TH ELAN-GUARDIAN 8 "July 2026" "elan-guardian 0.2.1" "System Administration"
 .SH NAME
 elan-guardian \- diagnose and recover Elantech I2C input controllers
 .SH SYNOPSIS
@@ -16,6 +16,11 @@ elan-guardian \- diagnose and recover Elantech I2C input controllers
 .br
 .B elan-guardian recover
 .RI [ --all " | " --device " I2C-ID]"
+.RI [ --rebind ]
+.br
+.B elan-guardian watch
+.RI [ --affected-only ]
+.RI [ --interval-ms " MS]"
 .SH DESCRIPTION
 .B elan-guardian
 captures Elantech IRQ and evdev evidence without grabbing an input device or
@@ -24,8 +29,10 @@ transport stall from a driver, userspace, or compositor fault.
 .PP
 Recovery is restricted to devices already bound to the
 .B elan_i2c
-kernel driver. An in-place kernel recovery attribute is preferred when present;
-otherwise the driver is unbound and rebound with bounded retries.
+kernel driver. An in-place kernel recovery attribute is preferred when present.
+If it fails, the driver is unbound and rebound with bounded retries. The
+.B --rebind
+option requests that fallback directly.
 .PP
 The supplied kernel patch also provides a runtime health watchdog. It is armed
 only while an Elan input node is open, checks the live transport every five
@@ -36,7 +43,7 @@ may be enabled for other validated systems with the
 firmware property.
 .PP
 The packaged source in
-.I /usr/src/elan-guardian-0.2.0/rust-shim
+.I /usr/src/elan-guardian-0.2.1/rust-shim
 builds a replacement
 .B elan_i2c.ko
 whose packet decoder, watchdog policy, and recovery state machine are written
@@ -52,9 +59,13 @@ when evdev activity is expected but the graphical cursor is not responding.
 .SH FILES
 .I /usr/lib/systemd/system/elan-guardian-resume.service
 runs one narrow recovery after resume on affected ThinkPad P53 systems whose
-kernels do not yet contain the watchdog patch. It is not a resident service.
+kernels do not yet contain the watchdog patch.
 .TP
-.I /usr/src/elan-guardian-0.2.0/rust-shim
+.I /usr/lib/systemd/system/elan-guardian-watch.service
+monitors only the kernel recovery counter and escalates an in-place recovery to
+a driver rebind. It never opens or grabs an evdev node.
+.TP
+.I /usr/src/elan-guardian-0.2.1/rust-shim
 contains the Rust-core kernel module source and external Kbuild file.
 .SH SECURITY
 The recording path opens evdev read-only and never issues EVIOCGRAB. Recovery

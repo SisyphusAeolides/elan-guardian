@@ -1,5 +1,5 @@
 NAME := elan-guardian
-VERSION := 0.2.0
+VERSION := 0.2.1
 RPM_TOPDIR ?= $(HOME)/rpmbuild
 
 .PHONY: all rust fortran kmod check formal-check clean dist srpm packaging-check
@@ -31,9 +31,11 @@ formal-check:
 packaging-check:
 	test -f elan-guardian.spec
 	test -f systemd/elan-guardian-resume.service
+	test -f systemd/elan-guardian-watch.service
 	test -f packaging/elan-guardian.8
 	grep -q '^Version:[[:space:]]*$(VERSION)$$' elan-guardian.spec
 	grep -q 'ExecStop=/usr/bin/elan-guardian recover --all --affected-only --quiet' systemd/elan-guardian-resume.service
+	grep -q 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 1000' systemd/elan-guardian-watch.service
 
 dist:
 	mkdir -p target/dist

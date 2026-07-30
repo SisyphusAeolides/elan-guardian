@@ -136,6 +136,13 @@ static int elan_i2c_write_cmd(struct i2c_client *client, u16 reg, u16 cmd)
 	return 0;
 }
 
+static int elan_i2c_health_check(struct i2c_client *client)
+{
+	u8 val[ETP_I2C_INF_LENGTH];
+
+	return elan_i2c_read_cmd(client, ETP_I2C_FW_VERSION_CMD, val);
+}
+
 static int elan_i2c_initialize(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -751,6 +758,7 @@ const struct elan_transport_ops elan_i2c_ops = {
 	.sleep_control		= elan_i2c_sleep_control,
 	.power_control		= elan_i2c_power_control,
 	.set_mode		= elan_i2c_set_mode,
+	.health_check		= elan_i2c_health_check,
 
 	.calibrate		= elan_i2c_calibrate,
 	.calibrate_result	= elan_i2c_calibrate_result,

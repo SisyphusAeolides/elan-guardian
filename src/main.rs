@@ -1,8 +1,9 @@
 use elan_guardian::device::{affected_thinkpad_p53, discover};
 use elan_guardian::diagnose::analyze_trace;
 use elan_guardian::irq;
-use elan_guardian::recover;
+use elan_guardian::recover::{rebind_controller, recover};
 use elan_guardian::trace::{self, RecordOptions};
+use elan_guardian::watch;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -33,6 +34,7 @@ fn run(args: &[OsString]) -> Result<(), String> {
         "analyze" => analyze_command(&args[1..])?,
         "export-features" => export_features(&args[1..])?,
         "recover" => recover_command(&args[1..])?,
+        "watch" => watch_command(&args[1..])?,
         other => return Err(format!("unknown command '{other}' (try --help)")),
     }
     Ok(())
@@ -176,6 +178,7 @@ fn recover_command(args: &[OsString]) -> Result<(), String> {
     let mut requested = Vec::new();
     let mut affected_only = false;
     let mut quiet = false;
+    let mut force_rebind = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].to_str() {
@@ -190,6 +193,7 @@ fn recover_command(args: &[OsString]) -> Result<(), String> {
             Some("--all") => {}
             Some("--affected-only") => affected_only = true,
             Some("--quiet") => quiet = true,
+            Some("--rebind") => force_rebind = true,
             Some(option) => return Err(format!("unknown recover option '{option}'")),
             None => return Err("recover arguments must be valid UTF-8".into()),
         }
@@ -212,7 +216,12 @@ fn recover_command(args: &[OsString]) -> Result<(), String> {
         return Err("no controllers are bound to elan_i2c".into());
     }
     for id in requested {
-        let recovered = recover(Path::new("/sys"), &id).map_err(|error| error.to_string())?;
+        let recovered = if force_rebind {
+            rebind_controller(Path::new("/sys"), &id)
+        } else {
+            recover(Path::new("/sys"), &id)
+        }
+        .map_err(|error| error.to_string())?;
         if !quiet {
             println!(
                 "Recovered {} via {:?} ({})",
@@ -223,6 +232,34 @@ fn recover_command(args: &[OsString]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn watch_command(args: &[OsString]) -> Result<(), String> {
+    let mut affected_only = false;
+    let mut interval = Duration::from_secs(1);
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].to_str() {
+            Some("--affected-only") => affected_only = true,
+            Some("--interval-ms") => {
+                index += 1;
+                interval = Duration::from_millis(parse_u64(args.get(index), "--interval-ms")?);
+                if interval.is_zero() {
+                    return Err("--interval-ms must be greater than zero".into());
+                }
+            }
+            Some(option) => return Err(format!("unknown watch option '{option}'")),
+            None => return Err("watch arguments must be valid UTF-8".into()),
+        }
+        index += 1;
+    }
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("watch must run as root".into());
+    }
+    if affected_only && !affected_thinkpad_p53(Path::new("/sys")) {
+        return Ok(());
+    }
+    watch::monitor(Path::new("/sys"), interval).map_err(|error| error.to_string())
 }
 
 fn parse_u64(value: Option<&OsString>, option: &str) -> Result<u64, String> {
@@ -242,7 +279,9 @@ fn print_help() {
                [--interval-ms MS] [--expect-motion] [--cursor-stalled]\n\
            elan-guardian analyze TRACE.json [--json]\n\
            elan-guardian export-features TRACE.json OUTPUT.dat\n\
-           elan-guardian recover [--all | --device I2C-ID] [--affected-only] [--quiet]",
+           elan-guardian recover [--all | --device I2C-ID] [--affected-only]
+               [--rebind] [--quiet]
+           elan-guardian watch [--affected-only] [--interval-ms MS]",
         env!("CARGO_PKG_VERSION")
     );
 }

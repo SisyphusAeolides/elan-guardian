@@ -74,6 +74,7 @@ struct elan_transport_ops {
 	int (*sleep_control)(struct i2c_client *, bool sleep);
 	int (*power_control)(struct i2c_client *, bool enable);
 	int (*set_mode)(struct i2c_client *client, u8 mode);
+	int (*health_check)(struct i2c_client *client);
 
 	int (*calibrate)(struct i2c_client *client);
 	int (*calibrate_result)(struct i2c_client *client, u8 *val);

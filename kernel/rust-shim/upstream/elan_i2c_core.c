@@ -850,13 +850,11 @@ static void elan_queue_watchdog(struct elan_tp_data *data,
 
 static int elan_watchdog_ping(struct elan_tp_data *data)
 {
-	u8 version;
 	int error;
 	int retry;
 
 	for (retry = 0; retry < ETP_RETRY_COUNT; retry++) {
-		error = data->ops->get_version(data->client, data->pattern,
-					       false, &version);
+		error = data->ops->health_check(data->client);
 		if (!error)
 			return 0;
 		msleep(30);

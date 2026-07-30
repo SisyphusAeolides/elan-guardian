@@ -7,6 +7,7 @@ if [[ $# -ne 1 || ! -f $1 ]]; then
 fi
 package=$1
 [[ $(rpm -qp --qf '%{NAME}' "$package") == elan-guardian ]]
+version=$(rpm -qp --qf '%{VERSION}' "$package")
 
 tmp_root=${TMPDIR:-/tmp}
 stage=$(mktemp -d "$tmp_root/elan-guardian-rpm.XXXXXX")
@@ -26,22 +27,26 @@ trap cleanup EXIT
 binary=$stage/usr/bin/elan-guardian
 scorer=$stage/usr/bin/elan-trace-score
 service=$stage/usr/lib/systemd/system/elan-guardian-resume.service
+watch_service=$stage/usr/lib/systemd/system/elan-guardian-watch.service
 
 [[ -x $binary && -x $scorer ]]
-[[ -f $service ]]
+[[ -f $service && -f $watch_service ]]
 [[ -f $stage/usr/lib/systemd/system-preset/91-elan-guardian.preset ]]
 [[ -f $stage/usr/share/man/man8/elan-guardian.8.gz ]]
 [[ -f $stage/usr/share/doc/elan-guardian/formal/agda/ElanGuardian.agda ]]
 [[ -f $stage/usr/share/doc/elan-guardian/formal/idris/ElanPolicy.idr ]]
 [[ -f $stage/usr/share/doc/elan-guardian/kernel/0001-input-elan-i2c-add-in-place-recovery.patch ]]
-[[ -f $stage/usr/src/elan-guardian-0.2.0/rust-shim/lib.rs ]]
-[[ -f $stage/usr/src/elan-guardian-0.2.0/rust-shim/elan_rs_shim.c ]]
+[[ -f $stage/usr/src/elan-guardian-$version/rust-shim/lib.rs ]]
+[[ -f $stage/usr/src/elan-guardian-$version/rust-shim/elan_rs_shim.c ]]
 [[ ! -e $stage/usr/lib/systemd/system/elan-guardian.service ]]
 rg -F 'ExecStop=/usr/bin/elan-guardian recover --all --affected-only --quiet' "$service"
 rg -F 'WantedBy=sleep.target' "$service"
+rg -F 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 1000' "$watch_service"
+rg -F 'WantedBy=multi-user.target' "$watch_service"
 
-"$binary" --version | rg '^elan-guardian 0\.2\.0$'
+[[ $("$binary" --version) == "elan-guardian $version" ]]
 "$binary" --help | rg 'record --output TRACE\.json'
+"$binary" --help | rg 'watch \[--affected-only\]'
 
 readelf -lW "$binary" | rg 'GNU_RELRO'
 readelf -dW "$binary" | rg 'BIND_NOW|FLAGS_1.*NOW'

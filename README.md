@@ -9,7 +9,8 @@ Elan hardware → IRQ / SMBus → elan_i2c → evdev → input consumer
 ```
 
 The project does not replace the system SMBus controller, grab physical input
-devices, synthesize a virtual mouse, or run a resident daemon.
+devices, or synthesize a virtual mouse. Its optional resident recovery monitor
+reads only the kernel watchdog counter and never opens evdev.
 
 ## Components
 
@@ -58,8 +59,9 @@ sudo elan-guardian recover --all
 ```
 
 The command prefers the in-place recovery interface supplied by the kernel
-patch. On an unpatched kernel it falls back to a bounded unbind/rebind and waits
-for evdev nodes to return.
+patch. If that operation fails, or on an unpatched kernel, it falls back to a
+bounded unbind/rebind and waits for evdev nodes to return. Use `--rebind` to
+request the hard fallback directly.
 
 ## Automatic prevention and recovery
 
@@ -77,6 +79,12 @@ Its state and successful automatic-recovery count are exported through the
 read-only `runtime_watchdog` sysfs attribute and shown by
 `elan-guardian status`. The manual `recover` attribute remains available as a
 bounded fallback.
+
+On affected ThinkPad P53 systems, `elan-guardian-watch.service` watches only
+that counter. When the kernel has attempted an in-place recovery, the monitor
+rebinds the controller so the desktop receives fresh Touchpad and TrackPoint
+devices. This closes the case where the transport reset succeeds but an
+existing userspace input path remains unusable.
 
 ## Build and verify
 
@@ -122,10 +130,10 @@ does not create a compatible weak-update link.
 ## Packaging
 
 The RPM installs the Rust and Fortran tools, manual page, module source under
-`/usr/src/elan-guardian-0.2.0/rust-shim`, and a non-resident systemd sleep unit
-for kernels that do not yet contain the watchdog. The unit runs recovery after
-resume only when DMI identifies an affected ThinkPad P53. Formal sources and
-the in-tree kernel patch remain independently buildable.
+`/usr/src/elan-guardian-0.2.1/rust-shim`, a sleep recovery unit, and the
+non-grabbing watchdog monitor. Both recovery units act only when DMI identifies
+an affected ThinkPad P53. Formal sources and the in-tree kernel patch remain
+independently buildable.
 
 Supported build targets:
 

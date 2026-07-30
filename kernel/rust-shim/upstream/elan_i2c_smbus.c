@@ -91,6 +91,11 @@ static int elan_smbus_set_mode(struct i2c_client *client, u8 mode)
 					  sizeof(cmd), cmd);
 }
 
+static int elan_smbus_health_check(struct i2c_client *client)
+{
+	return i2c_smbus_write_byte(client, ETP_SMBUS_ENABLE_TP);
+}
+
 static int elan_smbus_sleep_control(struct i2c_client *client, bool sleep)
 {
 	if (sleep)
@@ -529,6 +534,7 @@ const struct elan_transport_ops elan_smbus_ops = {
 	.sleep_control		= elan_smbus_sleep_control,
 	.power_control		= elan_smbus_power_control,
 	.set_mode		= elan_smbus_set_mode,
+	.health_check		= elan_smbus_health_check,
 
 	.calibrate		= elan_smbus_calibrate,
 	.calibrate_result	= elan_smbus_calibrate_result,

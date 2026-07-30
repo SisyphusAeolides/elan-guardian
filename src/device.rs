@@ -15,6 +15,7 @@ pub struct Controller {
     pub sample_version: Option<String>,
     pub iap_version: Option<String>,
     pub mode: Option<String>,
+    pub runtime_watchdog: Option<String>,
     pub irq: Option<u32>,
     pub event_nodes: Vec<PathBuf>,
 }
@@ -41,6 +42,7 @@ pub fn discover(sysfs_root: &Path) -> io::Result<Vec<Controller>> {
             sample_version: read_trimmed(path.join("sample_version")),
             iap_version: read_trimmed(path.join("iap_version")),
             mode: read_trimmed(path.join("mode")),
+            runtime_watchdog: read_trimmed(path.join("runtime_watchdog")),
             irq: read_trimmed(path.join("irq")).and_then(|value| value.parse().ok()),
             event_nodes: event_nodes(&path),
         });

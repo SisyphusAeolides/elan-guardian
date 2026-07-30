@@ -60,3 +60,40 @@ evdevWithoutCursor = Refl
 public export
 successfulRecoveryIsActive : next Recovering FinishRecovery = Active
 successfulRecoveryIsActive = Refl
+
+public export
+data WatchdogAction = Disarmed | ObserveHealth | RecoverInPlace
+
+public export
+record WatchdogEvidence where
+  constructor MkWatchdogEvidence
+  inputOpen : Bool
+  transportProbeOk : Bool
+  consecutiveReportErrors : Nat
+
+public export
+watchdog : WatchdogEvidence -> WatchdogAction
+watchdog e =
+  if not e.inputOpen then Disarmed
+  else if not e.transportProbeOk then RecoverInPlace
+  else if e.consecutiveReportErrors >= 3 then RecoverInPlace
+  else ObserveHealth
+
+public export
+closedInputDisarms : watchdog (MkWatchdogEvidence False False 3) = Disarmed
+closedInputDisarms = Refl
+
+public export
+transportProbeFailureRecovers :
+  watchdog (MkWatchdogEvidence True False 0) = RecoverInPlace
+transportProbeFailureRecovers = Refl
+
+public export
+reportFailureLimitRecovers :
+  watchdog (MkWatchdogEvidence True True 3) = RecoverInPlace
+reportFailureLimitRecovers = Refl
+
+public export
+healthyOpenInputIsObserved :
+  watchdog (MkWatchdogEvidence True True 0) = ObserveHealth
+healthyOpenInputIsObserved = Refl

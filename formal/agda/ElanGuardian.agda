@@ -38,6 +38,29 @@ data IrqState : Set where
   enabled : IrqState
   disabled : IrqState
 
+data InputUse : Set where
+  closed : InputUse
+  opened : InputUse
+
+data ProbeState : Set where
+  reachable : ProbeState
+  unreachable : ProbeState
+
+data ReportHealth : Set where
+  reportsHealthy : ReportHealth
+  reportFailureLimit : ReportHealth
+
+data WatchdogAction : Set where
+  disarm : WatchdogAction
+  observe : WatchdogAction
+  recoverInPlace : WatchdogAction
+
+watchdog : InputUse → ProbeState → ReportHealth → WatchdogAction
+watchdog closed probe reports = disarm
+watchdog opened unreachable reports = recoverInPlace
+watchdog opened reachable reportFailureLimit = recoverInPlace
+watchdog opened reachable reportsHealthy = observe
+
 record Machine : Set where
   constructor machine
   field
@@ -69,3 +92,18 @@ recovery-counts-attempt count = refl
 
 wake-returns-active : step waking wakeComplete ≡ active
 wake-returns-active = refl
+
+closed-input-disarms : ∀ probe reports → watchdog closed probe reports ≡ disarm
+closed-input-disarms probe reports = refl
+
+transport-failure-recovers : ∀ reports →
+  watchdog opened unreachable reports ≡ recoverInPlace
+transport-failure-recovers reports = refl
+
+report-failure-limit-recovers :
+  watchdog opened reachable reportFailureLimit ≡ recoverInPlace
+report-failure-limit-recovers = refl
+
+healthy-open-input-is-not-reset :
+  watchdog opened reachable reportsHealthy ≡ observe
+healthy-open-input-is-not-reset = refl

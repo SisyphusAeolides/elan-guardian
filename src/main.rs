@@ -67,6 +67,13 @@ fn status(args: &[OsString]) -> Result<(), String> {
             controller.iap_version.as_deref().unwrap_or("unknown")
         );
         println!(
+            "  Runtime watchdog: {}",
+            controller
+                .runtime_watchdog
+                .as_deref()
+                .unwrap_or("unavailable")
+        );
+        println!(
             "  IRQ total: {}",
             irq_total
                 .map(|v| v.to_string())

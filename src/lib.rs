@@ -5,6 +5,7 @@
 pub mod device;
 pub mod diagnose;
 pub mod irq;
+pub mod policy;
 pub mod recover;
 pub mod trace;
 

@@ -17,3 +17,11 @@ printf '%s\n' '4 24 1 1' >"$fixture"
 test "$("$binary" "$fixture")" = consumer-stalled
 printf '%s\n' '4 24 1 0' >"$fixture"
 test "$("$binary" "$fixture")" = healthy
+printf '%s\n' '0 0 3' >"$fixture"
+test "$("$binary" --watchdog "$fixture")" = disarmed
+printf '%s\n' '1 1 0' >"$fixture"
+test "$("$binary" --watchdog "$fixture")" = observe
+printf '%s\n' '1 0 0' >"$fixture"
+test "$("$binary" --watchdog "$fixture")" = recover-in-place
+printf '%s\n' '1 1 3' >"$fixture"
+test "$("$binary" --watchdog "$fixture")" = recover-in-place

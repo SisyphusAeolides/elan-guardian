@@ -26,6 +26,14 @@ Recovery is restricted to devices already bound to the
 .B elan_i2c
 kernel driver. An in-place kernel recovery attribute is preferred when present;
 otherwise the driver is unbound and rebound with bounded retries.
+.PP
+The supplied kernel patch also provides a runtime health watchdog. It is armed
+only while an Elan input node is open, checks the live transport every five
+seconds, and performs in-place recovery after a failed probe or repeated report
+errors. The watchdog is enabled by default on Lenovo ThinkPad P53 systems and
+may be enabled for other validated systems with the
+.B elan,runtime-watchdog
+firmware property.
 .SH RECORDING
 Use
 .B --expect-motion
@@ -35,8 +43,8 @@ Add
 when evdev activity is expected but the graphical cursor is not responding.
 .SH FILES
 .I /usr/lib/systemd/system/elan-guardian-resume.service
-runs one narrow recovery after resume on affected ThinkPad P53 systems. It is
-not a resident service.
+runs one narrow recovery after resume on affected ThinkPad P53 systems whose
+kernels do not yet contain the watchdog patch. It is not a resident service.
 .SH SECURITY
 The recording path opens evdev read-only and never issues EVIOCGRAB. Recovery
 requires root and validates both the I2C identifier and current driver binding.

@@ -43,7 +43,7 @@ jobs:
           fetch-depth: 0
       - name: Install build tools
         run: >-
-          dnf -y -q install binutils cargo cpio elfutils gcc-gfortran make
+          dnf -y -q install binutils cargo cpio elfutils gcc-gfortran git make
           ripgrep rpm-build rpmdevtools rust systemd-rpm-macros
       - name: Build source and binary packages
         run: |

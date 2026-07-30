@@ -9,8 +9,9 @@ Elan hardware → IRQ / SMBus → elan_i2c → evdev → input consumer
 ```
 
 The project does not replace the system SMBus controller, grab physical input
-devices, or synthesize a virtual mouse. Its optional resident recovery monitor
-reads only the kernel watchdog counter and never opens evdev.
+devices, or synthesize a virtual mouse. Its resident recovery monitor reads the
+kernel watchdog counter and polls existing libinput descriptors without
+opening or consuming evdev events.
 
 ## Components
 
@@ -80,11 +81,14 @@ read-only `runtime_watchdog` sysfs attribute and shown by
 `elan-guardian status`. The manual `recover` attribute remains available as a
 bounded fallback.
 
-On affected ThinkPad P53 systems, `elan-guardian-watch.service` watches only
-that counter. When the kernel has attempted an in-place recovery, the monitor
-rebinds the controller so the desktop receives fresh Touchpad and TrackPoint
-devices. This closes the case where the transport reset succeeds but an
-existing userspace input path remains unusable.
+On affected ThinkPad P53 systems, `elan-guardian-watch.service` watches that
+counter and finds ELAN descriptors already registered in a libinput consumer's
+epoll set. It duplicates those existing file descriptions with `pidfd_getfd`
+only to poll readiness; it never reads, opens, or grabs an evdev node. If a
+descriptor remains continuously readable for 750 ms, the consumer has stopped
+draining a live kernel stream and the monitor rebinds the controller. A
+five-second cooldown prevents recovery loops while the desktop consumes the
+replacement Touchpad and TrackPoint hotplug events.
 
 ## Build and verify
 
@@ -130,7 +134,7 @@ does not create a compatible weak-update link.
 ## Packaging
 
 The RPM installs the Rust and Fortran tools, manual page, module source under
-`/usr/src/elan-guardian-0.2.1/rust-shim`, a sleep recovery unit, and the
+`/usr/src/elan-guardian-0.2.2/rust-shim`, a sleep recovery unit, and the
 non-grabbing watchdog monitor. Both recovery units act only when DMI identifies
 an affected ThinkPad P53. Formal sources and the in-tree kernel patch remain
 independently buildable.

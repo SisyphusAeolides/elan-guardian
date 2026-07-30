@@ -1,12 +1,12 @@
 [Unit]
-Description=Escalate unsuccessful ELAN kernel recoveries
+Description=Recover stalled ELAN kernel and libinput consumers
 Documentation=man:elan-guardian(8)
 After=systemd-udev-settle.service
 ConditionPathExists=/sys/bus/i2c/drivers/elan_i2c
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 1000
+ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 100
 Restart=on-failure
 RestartSec=2s
 NoNewPrivileges=yes

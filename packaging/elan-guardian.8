@@ -1,4 +1,4 @@
-.TH ELAN-GUARDIAN 8 "July 2026" "elan-guardian 0.2.1" "System Administration"
+.TH ELAN-GUARDIAN 8 "July 2026" "elan-guardian 0.2.2" "System Administration"
 .SH NAME
 elan-guardian \- diagnose and recover Elantech I2C input controllers
 .SH SYNOPSIS
@@ -43,7 +43,7 @@ may be enabled for other validated systems with the
 firmware property.
 .PP
 The packaged source in
-.I /usr/src/elan-guardian-0.2.1/rust-shim
+.I /usr/src/elan-guardian-0.2.2/rust-shim
 builds a replacement
 .B elan_i2c.ko
 whose packet decoder, watchdog policy, and recovery state machine are written
@@ -62,10 +62,13 @@ runs one narrow recovery after resume on affected ThinkPad P53 systems whose
 kernels do not yet contain the watchdog patch.
 .TP
 .I /usr/lib/systemd/system/elan-guardian-watch.service
-monitors only the kernel recovery counter and escalates an in-place recovery to
-a driver rebind. It never opens or grabs an evdev node.
+monitors the kernel recovery counter and the readiness of ELAN descriptors
+already registered in a libinput consumer's epoll set. A descriptor that stays
+continuously readable for 750 ms indicates that the consumer stopped draining
+it, so the service rebinds the controller. It duplicates descriptors with
+pidfd_getfd only for polling and never reads, opens, or grabs an evdev node.
 .TP
-.I /usr/src/elan-guardian-0.2.1/rust-shim
+.I /usr/src/elan-guardian-0.2.2/rust-shim
 contains the Rust-core kernel module source and external Kbuild file.
 .SH SECURITY
 The recording path opens evdev read-only and never issues EVIOCGRAB. Recovery

@@ -1,10 +1,15 @@
+use crate::consumer::{BacklogObserver, ConsumerMonitor};
 use crate::device::discover;
 use crate::recover::rebind_controller;
 use std::collections::HashMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const CONSUMER_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const CONSUMER_BACKLOG_GRACE: Duration = Duration::from_millis(750);
+const RECOVERY_COOLDOWN: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default)]
 pub struct RecoveryObserver {
@@ -31,11 +36,18 @@ pub fn recovery_count(status: &str) -> Option<u64> {
 
 pub fn monitor(sysfs_root: &Path, interval: Duration) -> io::Result<()> {
     let mut observer = RecoveryObserver::default();
+    let mut consumers = ConsumerMonitor::new(PathBuf::from("/proc"), CONSUMER_REFRESH_INTERVAL);
+    let mut backlog = BacklogObserver::default();
+    let mut consumer_count = None;
+    let mut consumer_error_reported = false;
+    let mut recovery_cooldown_until = None;
 
     loop {
+        let now = Instant::now();
         match discover(sysfs_root) {
             Ok(controllers) => {
-                for controller in controllers {
+                let mut recovered_this_pass = false;
+                for controller in &controllers {
                     let Some(count) = controller
                         .runtime_watchdog
                         .as_deref()
@@ -52,6 +64,8 @@ pub fn monitor(sysfs_root: &Path, interval: Duration) -> io::Result<()> {
                         match rebind_controller(sysfs_root, &controller.id) {
                             Ok(recovered) => {
                                 observer.mark(&controller.id, 0);
+                                recovered_this_pass = true;
+                                recovery_cooldown_until = Some(now + RECOVERY_COOLDOWN);
                                 eprintln!(
                                     "elan-guardian: rebound {} ({})",
                                     recovered.id,
@@ -67,6 +81,72 @@ pub fn monitor(sysfs_root: &Path, interval: Duration) -> io::Result<()> {
                         }
                     } else {
                         observer.mark(&controller.id, count);
+                    }
+                }
+
+                if recovered_this_pass
+                    || recovery_cooldown_until.is_some_and(|deadline| now < deadline)
+                {
+                    backlog.clear();
+                    consumers.force_refresh();
+                } else {
+                    match consumers.refresh_if_due(&controllers, now) {
+                        Ok(refreshed) => {
+                            consumer_error_reported = false;
+                            if refreshed && consumer_count != Some(consumers.len()) {
+                                consumer_count = Some(consumers.len());
+                                eprintln!(
+                                    "elan-guardian: monitoring {} registered libinput ELAN fd(s)",
+                                    consumers.len()
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            if !consumer_error_reported {
+                                eprintln!(
+                                    "elan-guardian: consumer backlog monitoring unavailable: {error}"
+                                );
+                                consumer_error_reported = true;
+                            }
+                        }
+                    }
+
+                    if !consumers.is_empty() {
+                        let samples = consumers.readiness();
+                        if let Some(stalled) =
+                            backlog.observe(now, &samples, CONSUMER_BACKLOG_GRACE)
+                        {
+                            let controller = controllers.iter().find(|controller| {
+                                controller.event_nodes.contains(&stalled.event_node)
+                            });
+                            if let Some(controller) = controller {
+                                eprintln!(
+                                    "elan-guardian: libinput consumer pid {} fd {} left {} unread for {} ms; rebinding {}",
+                                    stalled.pid,
+                                    stalled.remote_fd,
+                                    stalled.event_node.display(),
+                                    CONSUMER_BACKLOG_GRACE.as_millis(),
+                                    controller.id
+                                );
+                                match rebind_controller(sysfs_root, &controller.id) {
+                                    Ok(recovered) => {
+                                        observer.mark(&controller.id, 0);
+                                        recovery_cooldown_until = Some(now + RECOVERY_COOLDOWN);
+                                        eprintln!(
+                                            "elan-guardian: rebound {} ({})",
+                                            recovered.id,
+                                            recovered.event_nodes.join(", ")
+                                        );
+                                    }
+                                    Err(error) => eprintln!(
+                                        "elan-guardian: consumer-stall rebind of {} failed: {error}",
+                                        controller.id
+                                    ),
+                                }
+                                backlog.clear();
+                                consumers.force_refresh();
+                            }
+                        }
                     }
                 }
             }

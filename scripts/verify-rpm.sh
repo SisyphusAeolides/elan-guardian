@@ -41,7 +41,7 @@ watch_service=$stage/usr/lib/systemd/system/elan-guardian-watch.service
 [[ ! -e $stage/usr/lib/systemd/system/elan-guardian.service ]]
 rg -F 'ExecStop=/usr/bin/elan-guardian recover --all --affected-only --quiet' "$service"
 rg -F 'WantedBy=sleep.target' "$service"
-rg -F 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 1000' "$watch_service"
+rg -F 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 100' "$watch_service"
 rg -F 'WantedBy=multi-user.target' "$watch_service"
 
 [[ $("$binary" --version) == "elan-guardian $version" ]]

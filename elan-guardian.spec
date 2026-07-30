@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.2.1
+Version:        0.2.2
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -94,6 +94,11 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
+* Thu Jul 30 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.2-1
+- Detect continuously unread ELAN queues on registered libinput descriptors
+- Rebind consumer-stalled controllers without reading or grabbing evdev events
+- Poll consumer liveness at 100 ms with a 750 ms continuous-backlog gate
+
 * Thu Jul 30 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.1-1
 - Rebind automatically when an in-place kernel recovery does not restore input
 - Write sysfs control commands atomically instead of splitting the newline

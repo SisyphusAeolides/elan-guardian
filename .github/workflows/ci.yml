@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  rust-msrv:
+    name: Rust 1.75
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.75.0
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+
+  independent-models:
+    name: Agda, Idris 2, and Fortran
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install compilers
+        run: dnf -y -q install Agda gcc-gfortran idris2 make
+      - name: Compile and test models
+        run: make fortran formal-check && scripts/test-fortran.sh target/release/elan-trace-score
+
+  rpm:
+    name: RPM
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install build tools
+        run: >-
+          dnf -y -q install binutils cargo cpio elfutils gcc-gfortran make
+          ripgrep rpm-build rpmdevtools rust systemd-rpm-macros
+      - name: Build source and binary packages
+        run: |
+          rpm_topdir="$RUNNER_TEMP/rpmbuild"
+          make packaging-check srpm RPM_TOPDIR="$rpm_topdir"
+          rpmbuild --rebuild "$rpm_topdir"/SRPMS/*.src.rpm --define "_topdir $rpm_topdir"
+          package=$(find "$rpm_topdir/RPMS" -name 'elan-guardian-[0-9]*.rpm' -print -quit)
+          test -n "$package"
+          scripts/verify-rpm.sh "$package"
+          mkdir -p artifacts
+          cp "$package" "$rpm_topdir"/SRPMS/*.src.rpm artifacts/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: elan-guardian-rpms
+          path: artifacts/*
+
+  kernel-patch:
+    name: Linux 6.12 patch applicability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch exact upstream source
+        run: |
+          git clone --depth=1 --filter=blob:none --sparse --branch v6.12 \
+            https://github.com/torvalds/linux.git "$RUNNER_TEMP/linux"
+          git -C "$RUNNER_TEMP/linux" sparse-checkout set drivers/input/mouse
+      - name: Validate patch
+        run: git -C "$RUNNER_TEMP/linux" apply --check "$GITHUB_WORKSPACE/kernel/0001-input-elan-i2c-add-in-place-recovery.patch"

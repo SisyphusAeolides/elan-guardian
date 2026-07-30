@@ -1,0 +1,100 @@
+From: Kenny Glowner <SisyphusAeolides@pm.me>
+Date: Thu, 30 Jul 2026 08:30:00 -0500
+Subject: [PATCH] Input: elan_i2c - add in-place controller recovery
+
+Some Elantech controllers remain registered after a transport fault but stop
+delivering input reports. Driver unbind and bind recovers the controller, but
+replaces its input devices and invalidates userspace file descriptors.
+
+Add a root-writable recover attribute that releases active input state and
+runs the existing full initialization sequence while retaining the registered
+input objects. Serialize it with firmware, calibration, suspend, and resume
+operations through the existing sysfs mutex.
+
+Signed-off-by: Kenny Glowner <SisyphusAeolides@pm.me>
+---
+ drivers/input/mouse/elan_i2c_core.c | 53 +++++++++++++++++++++++++++++
+ 1 file changed, 53 insertions(+)
+
+diff --git a/drivers/input/mouse/elan_i2c_core.c b/drivers/input/mouse/elan_i2c_core.c
+index 7521981..1167ff6 100644
+--- a/drivers/input/mouse/elan_i2c_core.c
++++ b/drivers/input/mouse/elan_i2c_core.c
+@@ -757,6 +757,58 @@ static ssize_t elan_sysfs_read_mode(struct device *dev,
+ 	return sysfs_emit(buf, "%d\n", (int)mode);
+ }
+ 
++static void elan_release_inputs(struct elan_tp_data *data)
++{
++	int i;
++
++	for (i = 0; i < ETP_MAX_FINGERS; i++) {
++		input_mt_slot(data->input, i);
++		input_mt_report_slot_inactive(data->input);
++	}
++	input_report_key(data->input, BTN_LEFT, 0);
++	input_report_key(data->input, BTN_MIDDLE, 0);
++	input_report_key(data->input, BTN_RIGHT, 0);
++	input_mt_report_pointer_emulation(data->input, true);
++	input_sync(data->input);
++
++	if (data->tp_input) {
++		input_report_key(data->tp_input, BTN_LEFT, 0);
++		input_report_key(data->tp_input, BTN_MIDDLE, 0);
++		input_report_key(data->tp_input, BTN_RIGHT, 0);
++		input_sync(data->tp_input);
++	}
++}
++
++static ssize_t recover_store(struct device *dev,
++			     struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct i2c_client *client = to_i2c_client(dev);
++	struct elan_tp_data *data = i2c_get_clientdata(client);
++	int error;
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++
++	error = mutex_lock_interruptible(&data->sysfs_mutex);
++	if (error)
++		return error;
++
++	disable_irq(client->irq);
++	elan_release_inputs(data);
++	error = elan_initialize(data, false);
++	enable_irq(client->irq);
++	mutex_unlock(&data->sysfs_mutex);
++
++	if (error) {
++		dev_err(dev, "in-place recovery failed: %d\n", error);
++		return error;
++	}
++
++	dev_info(dev, "controller recovered in place\n");
++	return count;
++}
++
+ static DEVICE_ATTR(product_id, S_IRUGO, elan_sysfs_read_product_id, NULL);
+ static DEVICE_ATTR(firmware_version, S_IRUGO, elan_sysfs_read_fw_ver, NULL);
+ static DEVICE_ATTR(sample_version, S_IRUGO, elan_sysfs_read_sm_ver, NULL);
+@@ -766,6 +818,7 @@ static DEVICE_ATTR(mode, S_IRUGO, elan_sysfs_read_mode, NULL);
+ static DEVICE_ATTR(update_fw, S_IWUSR, NULL, elan_sysfs_update_fw);
+ 
+ static DEVICE_ATTR_WO(calibrate);
++static DEVICE_ATTR_WO(recover);
+ 
+ static struct attribute *elan_sysfs_entries[] = {
+ 	&dev_attr_product_id.attr,
+@@ -774,6 +827,7 @@ static struct attribute *elan_sysfs_entries[] = {
+ 	&dev_attr_iap_version.attr,
+ 	&dev_attr_fw_checksum.attr,
+ 	&dev_attr_calibrate.attr,
++	&dev_attr_recover.attr,
+ 	&dev_attr_mode.attr,
+ 	&dev_attr_update_fw.attr,
+ 	NULL,
+-- 
+2.52.0
+

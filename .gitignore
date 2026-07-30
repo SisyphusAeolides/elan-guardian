@@ -1,0 +1,8 @@
+/target/
+/build/
+*.rpm
+*.src.rpm
+*.trace.json
+*.mod
+*.agdai
+elan-trace-score

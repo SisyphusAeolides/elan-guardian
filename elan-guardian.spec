@@ -1,0 +1,88 @@
+Name:           elan-guardian
+Version:        0.1.0
+Release:        1%{?dist}
+Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
+License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
+URL:            https://github.com/SisyphusAeolides/elan-guardian
+Source0:        %{name}-%{version}.tar.gz
+
+BuildRequires:  cargo >= 1.75
+BuildRequires:  rust >= 1.75
+BuildRequires:  gcc-gfortran
+BuildRequires:  systemd-rpm-macros
+
+%description
+Elan Guardian records Elantech IRQ and evdev activity to distinguish transport,
+kernel driver, and userspace input failures. It can reinitialize only devices
+already bound to the elan_i2c driver and never grabs input devices or creates a
+virtual pointer. Agda, Idris 2, and Fortran models provide independent checks of
+its state and classification policy.
+
+%prep
+%autosetup
+
+%build
+%set_build_flags
+CARGO_NET_OFFLINE=true cargo build --frozen --release
+mkdir -p target/release
+gfortran %{build_fflags} %{build_ldflags} -std=f2018 \
+    -o target/release/elan-trace-score fortran/elan_trace_score.f90
+
+%install
+install -Dm755 target/release/elan-guardian %{buildroot}%{_bindir}/elan-guardian
+install -Dm755 target/release/elan-trace-score %{buildroot}%{_bindir}/elan-trace-score
+install -Dm644 packaging/elan-guardian.8 %{buildroot}%{_mandir}/man8/elan-guardian.8
+install -Dm644 systemd/elan-guardian-resume.service \
+    %{buildroot}%{_unitdir}/elan-guardian-resume.service
+install -Dm644 systemd/91-elan-guardian.preset \
+    %{buildroot}%{_presetdir}/91-elan-guardian.preset
+install -Dm644 formal/agda/ElanGuardian.agda \
+    %{buildroot}%{_docdir}/%{name}/formal/agda/ElanGuardian.agda
+install -Dm644 formal/idris/ElanPolicy.idr \
+    %{buildroot}%{_docdir}/%{name}/formal/idris/ElanPolicy.idr
+install -Dm644 kernel/0001-input-elan-i2c-add-in-place-recovery.patch \
+    %{buildroot}%{_docdir}/%{name}/kernel/0001-input-elan-i2c-add-in-place-recovery.patch
+install -d %{buildroot}%{_licensedir}/%{name}/third-party
+for crate in vendor/*; do
+    test -d "$crate" || continue
+    destination=%{buildroot}%{_licensedir}/%{name}/third-party/$(basename "$crate")
+    for license in "$crate"/LICENSE* "$crate"/COPYING*; do
+        test -f "$license" || continue
+        install -d "$destination"
+        install -m644 "$license" "$destination/"
+    done
+done
+
+%post
+%systemd_post elan-guardian-resume.service
+
+%preun
+%systemd_preun elan-guardian-resume.service
+
+%postun
+%systemd_postun_with_restart elan-guardian-resume.service
+
+%check
+CARGO_NET_OFFLINE=true cargo test --frozen --all-targets
+scripts/test-fortran.sh target/release/elan-trace-score
+
+%files
+%license LICENSE
+%license %{_licensedir}/%{name}/third-party
+%doc README.md
+%doc %{_docdir}/%{name}/formal
+%doc %{_docdir}/%{name}/kernel
+%{_bindir}/elan-guardian
+%{_bindir}/elan-trace-score
+%{_mandir}/man8/elan-guardian.8*
+%{_unitdir}/elan-guardian-resume.service
+%{_presetdir}/91-elan-guardian.preset
+
+%changelog
+* Thu Jul 30 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.1.0-1
+- Record IRQ and evdev evidence without grabbing input devices
+- Separate transport, driver, and consumer-side input stalls
+- Recover dynamically discovered elan_i2c controllers with bounded retries
+- Prefer an in-place recovery interface when supplied by the kernel
+- Verify lifecycle and classification policy with Agda, Idris 2, and Fortran
+- Run affected-machine recovery after resume without a resident daemon

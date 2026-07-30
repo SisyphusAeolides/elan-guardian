@@ -1,0 +1,42 @@
+.TH ELAN-GUARDIAN 8 "July 2026" "elan-guardian 0.1.0" "System Administration"
+.SH NAME
+elan-guardian \- diagnose and recover Elantech I2C input controllers
+.SH SYNOPSIS
+.B elan-guardian status
+.RI [ --json ]
+.br
+.B elan-guardian record
+.B --output
+.I TRACE.json
+.RI [ options ]
+.br
+.B elan-guardian analyze
+.I TRACE.json
+.RI [ --json ]
+.br
+.B elan-guardian recover
+.RI [ --all " | " --device " I2C-ID]"
+.SH DESCRIPTION
+.B elan-guardian
+captures Elantech IRQ and evdev evidence without grabbing an input device or
+creating a virtual device. When expected movement is requested, it separates a
+transport stall from a driver, userspace, or compositor fault.
+.PP
+Recovery is restricted to devices already bound to the
+.B elan_i2c
+kernel driver. An in-place kernel recovery attribute is preferred when present;
+otherwise the driver is unbound and rebound with bounded retries.
+.SH RECORDING
+Use
+.B --expect-motion
+only while deliberately moving the touchpad or TrackPoint during the capture.
+Add
+.B --cursor-stalled
+when evdev activity is expected but the graphical cursor is not responding.
+.SH FILES
+.I /usr/lib/systemd/system/elan-guardian-resume.service
+runs one narrow recovery after resume on affected ThinkPad P53 systems. It is
+not a resident service.
+.SH SECURITY
+The recording path opens evdev read-only and never issues EVIOCGRAB. Recovery
+requires root and validates both the I2C identifier and current driver binding.

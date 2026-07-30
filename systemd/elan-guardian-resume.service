@@ -1,0 +1,15 @@
+[Unit]
+Description=Recover affected Elantech I2C controllers after sleep
+Documentation=man:elan-guardian(8)
+DefaultDependencies=no
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/true
+ExecStop=/usr/bin/elan-guardian recover --all --affected-only --quiet
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sleep.target

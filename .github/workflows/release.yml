@@ -21,8 +21,8 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install build tools
         run: >-
-          dnf -y -q install binutils cargo cpio elfutils gcc-gfortran git make
-          ripgrep rpm-build rpmdevtools rust systemd-rpm-macros gh
+          dnf -y -q install binutils cargo clippy cpio elfutils gcc-gfortran git make
+          ripgrep rpm-build rpmdevtools rust rustfmt systemd-rpm-macros gh
       - name: Build release artifacts
         run: |
           rpm_topdir="$RUNNER_TEMP/rpmbuild"

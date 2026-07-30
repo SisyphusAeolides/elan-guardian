@@ -1,8 +1,8 @@
 NAME := elan-guardian
-VERSION := 0.1.0
+VERSION := 0.2.0
 RPM_TOPDIR ?= $(HOME)/rpmbuild
 
-.PHONY: all rust fortran check formal-check clean dist srpm packaging-check
+.PHONY: all rust fortran kmod check formal-check clean dist srpm packaging-check
 
 all: rust fortran
 
@@ -13,6 +13,9 @@ fortran:
 	mkdir -p target/release
 	gfortran -std=f2018 -O2 -Wall -Wextra -Werror \
 		-o target/release/elan-trace-score fortran/elan_trace_score.f90
+
+kmod:
+	$(MAKE) -C kernel/rust-shim
 
 check: all
 	cargo fmt --all -- --check
@@ -44,5 +47,6 @@ srpm: dist
 
 clean:
 	cargo clean
+	$(MAKE) -C kernel/rust-shim clean
 	rm -f *.mod
 	find formal -type f -name '*.agdai' -delete

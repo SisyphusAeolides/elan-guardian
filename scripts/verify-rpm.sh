@@ -34,11 +34,13 @@ service=$stage/usr/lib/systemd/system/elan-guardian-resume.service
 [[ -f $stage/usr/share/doc/elan-guardian/formal/agda/ElanGuardian.agda ]]
 [[ -f $stage/usr/share/doc/elan-guardian/formal/idris/ElanPolicy.idr ]]
 [[ -f $stage/usr/share/doc/elan-guardian/kernel/0001-input-elan-i2c-add-in-place-recovery.patch ]]
+[[ -f $stage/usr/src/elan-guardian-0.2.0/rust-shim/lib.rs ]]
+[[ -f $stage/usr/src/elan-guardian-0.2.0/rust-shim/elan_rs_shim.c ]]
 [[ ! -e $stage/usr/lib/systemd/system/elan-guardian.service ]]
 rg -F 'ExecStop=/usr/bin/elan-guardian recover --all --affected-only --quiet' "$service"
 rg -F 'WantedBy=sleep.target' "$service"
 
-"$binary" --version | rg '^elan-guardian 0\.1\.0$'
+"$binary" --version | rg '^elan-guardian 0\.2\.0$'
 "$binary" --help | rg 'record --output TRACE\.json'
 
 readelf -lW "$binary" | rg 'GNU_RELRO'

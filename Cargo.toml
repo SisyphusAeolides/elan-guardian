@@ -1,6 +1,6 @@
 [package]
 name = "elan-guardian"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Kenny Glowner <SisyphusAeolides@pm.me>"]
@@ -14,6 +14,16 @@ keywords = ["linux", "elantech", "i2c", "input", "diagnostics"]
 categories = ["command-line-utilities", "hardware-support", "os::linux-apis"]
 include = [
     "src/**",
+    "tests/**",
+    "kernel/0001-input-elan-i2c-add-in-place-recovery.patch",
+    "kernel/rust-shim/Makefile",
+    "kernel/rust-shim/README.md",
+    "kernel/rust-shim/UPSTREAM",
+    "kernel/rust-shim/*.rs",
+    "kernel/rust-shim/*.c",
+    "kernel/rust-shim/*.h",
+    "kernel/rust-shim/upstream/*.c",
+    "kernel/rust-shim/upstream/*.h",
     "Cargo.toml",
     "Cargo.lock",
     "README.md",

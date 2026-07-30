@@ -6,3 +6,11 @@
 *.mod
 *.agdai
 elan-trace-score
+*.ko
+*.o
+*.o.cmd
+.*.cmd
+*.mod.c
+*.mod.o
+Module.symvers
+modules.order

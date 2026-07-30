@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -16,7 +16,9 @@ Elan Guardian records Elantech IRQ and evdev activity to distinguish transport,
 kernel driver, and userspace input failures. It can reinitialize only devices
 already bound to the elan_i2c driver and never grabs input devices or creates a
 virtual pointer. Agda, Idris 2, and Fortran models provide independent checks of
-its state and classification policy.
+its state and classification policy. A no_std Rust packet, watchdog, and
+recovery core plus a C Linux ABI shim can be built as a replacement elan_i2c
+module even when the target kernel has CONFIG_RUST disabled.
 
 %prep
 %autosetup
@@ -42,6 +44,12 @@ install -Dm644 formal/idris/ElanPolicy.idr \
     %{buildroot}%{_docdir}/%{name}/formal/idris/ElanPolicy.idr
 install -Dm644 kernel/0001-input-elan-i2c-add-in-place-recovery.patch \
     %{buildroot}%{_docdir}/%{name}/kernel/0001-input-elan-i2c-add-in-place-recovery.patch
+install -d %{buildroot}%{_prefix}/src/%{name}-%{version}/rust-shim
+cp -a kernel/rust-shim/Makefile kernel/rust-shim/README.md \
+    kernel/rust-shim/UPSTREAM kernel/rust-shim/elan_core.rs \
+    kernel/rust-shim/elan_rs_shim.c kernel/rust-shim/elan_rs_shim.h \
+    kernel/rust-shim/lib.rs kernel/rust-shim/upstream \
+    %{buildroot}%{_prefix}/src/%{name}-%{version}/rust-shim/
 install -d %{buildroot}%{_licensedir}/%{name}/third-party
 for crate in vendor/*; do
     test -d "$crate" || continue
@@ -72,6 +80,7 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %doc README.md
 %doc %{_docdir}/%{name}/formal
 %doc %{_docdir}/%{name}/kernel
+%{_prefix}/src/%{name}-%{version}
 %{_bindir}/elan-guardian
 %{_bindir}/elan-trace-score
 %{_mandir}/man8/elan-guardian.8*
@@ -79,6 +88,13 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
+* Thu Jul 30 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.0-1
+- Add a no_std Rust data and recovery core for the elan_i2c kernel module
+- Keep Linux I2C, input, IRQ, power, and registration calls behind a C shim
+- Build without requiring CONFIG_RUST in the target kernel
+- Decode touchpad and TrackPoint reports in Rust
+- Enable in-place automatic recovery on affected ThinkPad P53 systems
+
 * Thu Jul 30 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.1.0-1
 - Record IRQ and evdev evidence without grabbing input devices
 - Separate transport, driver, and consumer-side input stalls

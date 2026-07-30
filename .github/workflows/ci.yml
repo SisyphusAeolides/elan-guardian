@@ -65,7 +65,7 @@ jobs:
           path: artifacts/*
 
   kernel-patch:
-    name: Linux 6.12 patch compile
+    name: Linux 6.12 patch and Rust-core module
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -81,3 +81,9 @@ jobs:
           git -C "$RUNNER_TEMP/linux" apply "$GITHUB_WORKSPACE/kernel/0001-input-elan-i2c-add-in-place-recovery.patch"
           make -C "$RUNNER_TEMP/linux" defconfig
           make -C "$RUNNER_TEMP/linux" -j2 drivers/input/mouse/elan_i2c_core.o
+      - name: Compile and link Rust-core module
+        run: |
+          make -C kernel/rust-shim clean KDIR="$RUNNER_TEMP/linux"
+          make -C kernel/rust-shim elan_rs_core.o KDIR="$RUNNER_TEMP/linux"
+          make -C "$RUNNER_TEMP/linux" M="$GITHUB_WORKSPACE/kernel/rust-shim" elan_i2c.o
+          test "$(nm -u kernel/rust-shim/elan_rs_core.o | awk '{print $2}')" = __x86_return_thunk

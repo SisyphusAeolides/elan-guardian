@@ -1,0 +1,11 @@
+Linux source: v6.12
+Commit: adc218676eef25575469234709c2d87185ca223a
+Files:
+  drivers/input/mouse/elan_i2c.h
+  drivers/input/mouse/elan_i2c_core.c
+  drivers/input/mouse/elan_i2c_i2c.c
+  drivers/input/mouse/elan_i2c_smbus.c
+
+Local changes move report decoding, watchdog policy, and recovery sequencing
+behind the elan_rs_shim ABI and add the runtime recovery interface documented
+in this repository.

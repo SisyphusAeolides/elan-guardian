@@ -13,17 +13,18 @@ devices, synthesize a virtual mouse, or run a resident daemon.
 
 ## Components
 
-- Rust owns the executable diagnosis, watchdog policy, trace replay, and
-  narrowly validated recovery state machine.
+- Rust owns the executable diagnosis, trace replay, Elan report decoder,
+  watchdog policy, and bounded recovery state machine.
 - Agda proves IRQ, watchdog, and recovery-state invariants.
 - Idris 2 provides a total reference policy for fault classification and
   automatic recovery selection.
 - Fortran independently scores exported trace and watchdog features for
   differential tests.
-- `kernel/` contains the current-kernel C bridge: an upstream-oriented Linux
-  patch that runs the same health policy inside `elan_i2c`, automatically
-  reinitializing a failed controller without replacing its input objects or
-  invalidating userspace file descriptors.
+- `kernel/rust-shim/` builds an ordinary `elan_i2c.ko` with a `#![no_std]`
+  Rust data/policy core and a C Linux ABI shim. It works on kernels that have
+  `CONFIG_RUST` disabled.
+- `kernel/` also contains an upstream-oriented Linux patch that embeds the
+  same health policy in the in-tree driver.
 
 ## Diagnose a stalled cursor
 
@@ -88,13 +89,43 @@ make check
 Agda safe-mode proofs, and Idris totality checks when those compilers are
 installed.
 
+Build the replacement module for the running kernel with:
+
+```bash
+sudo dnf install "kernel-devel-$(uname -r)" binutils gcc make rust
+make kmod
+modinfo kernel/rust-shim/elan_i2c.ko
+```
+
+The build compiles the Rust core directly with the kernel code model, no red
+zone, no unwinding, return-thunk and IBT settings from the target kernel, and
+then rejects SIMD/FPU instructions, unexpected runtime symbols, or unmitigated
+indirect branches. The resulting module has the exact target-kernel vermagic
+and modversions.
+
+To stage it without overwriting the distribution module:
+
+```bash
+release=$(uname -r)
+sudo install -Dm644 kernel/rust-shim/elan_i2c.ko \
+  "/lib/modules/$release/updates/elan-guardian/elan_i2c.ko"
+sudo depmod -a "$release"
+printf '%s\n' "/lib/modules/$release/updates/elan-guardian/elan_i2c.ko" | \
+  sudo weak-modules --add-modules --no-initramfs
+modprobe -D elan_i2c
+```
+
+Reboot to activate the staged module. The stock module remains in its original
+location as the rollback copy. Rebuild for a new kernel whenever kABI checking
+does not create a compatible weak-update link.
+
 ## Packaging
 
-The RPM installs the Rust and Fortran tools, manual page, and a non-resident
-systemd sleep unit for kernels that do not yet contain the watchdog patch. The
-unit runs recovery after resume only when DMI identifies an affected ThinkPad
-P53. Formal sources and the kernel patch are installed as documentation and
-remain independently buildable.
+The RPM installs the Rust and Fortran tools, manual page, module source under
+`/usr/src/elan-guardian-0.2.0/rust-shim`, and a non-resident systemd sleep unit
+for kernels that do not yet contain the watchdog. The unit runs recovery after
+resume only when DMI identifies an affected ThinkPad P53. Formal sources and
+the in-tree kernel patch remain independently buildable.
 
 Supported build targets:
 
@@ -106,10 +137,12 @@ Supported build targets:
 ## Kernel integration
 
 Current RHEL kernels do not enable Rust kernel modules, and neither Fortran,
-Idris, nor Agda is suitable for Linux IRQ context. The deployable kernel bridge
-is therefore deliberately small C code suitable for review and backport. The
-executable reference implementation remains Rust, and its watchdog and fault
-policy are independently checked against the Agda, Idris, and Fortran models.
+Idris, nor Agda is suitable for Linux IRQ context. The hybrid module therefore
+links a freestanding no_std Rust object into an ordinary C-registered kernel
+module. C owns only the Linux I2C/SMBus, input, IRQ, firmware, power-management,
+and module ABI boundary; Rust decodes reports and controls watchdog/recovery
+policy. The same policy remains independently checked against the Agda, Idris,
+and Fortran models.
 
 ## License
 

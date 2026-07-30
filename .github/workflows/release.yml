@@ -12,9 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     container: fedora:44
     steps:
+      - name: Install checkout prerequisite
+        run: dnf -y -q install git
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Trust mounted checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install build tools
         run: >-
           dnf -y -q install binutils cargo cpio elfutils gcc-gfortran git make

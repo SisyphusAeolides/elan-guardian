@@ -1,5 +1,5 @@
 NAME := elan-guardian
-VERSION := 0.2.2
+VERSION := 0.2.3
 RPM_TOPDIR ?= $(HOME)/rpmbuild
 
 .PHONY: all rust fortran kmod check formal-check clean dist srpm packaging-check
@@ -44,7 +44,8 @@ dist:
 
 srpm: dist
 	mkdir -p $(RPM_TOPDIR)/SOURCES $(RPM_TOPDIR)/SRPMS
-	cp target/dist/$(NAME)-$(VERSION).tar.gz $(RPM_TOPDIR)/SOURCES/
+	cp target/dist/$(NAME)-$(VERSION).tar.gz \
+		$(RPM_TOPDIR)/SOURCES/v$(VERSION).tar.gz
 	rpmbuild -bs elan-guardian.spec --define "_topdir $(RPM_TOPDIR)"
 
 clean:

@@ -4,7 +4,7 @@ Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
 URL:            https://github.com/SisyphusAeolides/elan-guardian
-Source0:        %{name}-%{version}.tar.gz
+Source0:        https://github.com/SisyphusAeolides/elan-guardian/archive/refs/tags/v%{version}.tar.gz
 
 BuildRequires:  cargo >= 1.75
 BuildRequires:  rust >= 1.75

@@ -10,6 +10,7 @@ BuildRequires:  cargo >= 1.75
 BuildRequires:  rust >= 1.75
 BuildRequires:  gcc-gfortran
 BuildRequires:  systemd-rpm-macros
+Requires:       dkms
 
 %description
 Elan Guardian records Elantech IRQ and evdev activity to distinguish transport,
@@ -47,6 +48,7 @@ install -Dm644 formal/idris/ElanPolicy.idr \
 install -Dm644 kernel/0001-input-elan-i2c-add-in-place-recovery.patch \
     %{buildroot}%{_docdir}/%{name}/kernel/0001-input-elan-i2c-add-in-place-recovery.patch
 install -d %{buildroot}%{_prefix}/src/%{name}-%{version}/rust-shim
+cp -a dkms.conf %{buildroot}%{_prefix}/src/%{name}-%{version}/
 cp -a kernel/rust-shim/Makefile kernel/rust-shim/README.md \
     kernel/rust-shim/UPSTREAM kernel/rust-shim/elan_core.rs \
     kernel/rust-shim/elan_rs_shim.c kernel/rust-shim/elan_rs_shim.h \
@@ -66,10 +68,14 @@ done
 %post
 %systemd_post elan-guardian-resume.service
 %systemd_post elan-guardian-watch.service
+dkms add -m %{name} -v %{version} --rpm_safe_upgrade
+dkms build -m %{name} -v %{version}
+dkms install -m %{name} -v %{version} --force
 
 %preun
 %systemd_preun elan-guardian-resume.service
 %systemd_preun elan-guardian-watch.service
+dkms remove -m %{name} -v %{version} --all --rpm_safe_upgrade || true
 
 %postun
 %systemd_postun_with_restart elan-guardian-resume.service

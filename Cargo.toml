@@ -28,6 +28,7 @@ include = [
     "Cargo.lock",
     "README.md",
     "LICENSE",
+    "dkms.conf",
 ]
 
 [dependencies]

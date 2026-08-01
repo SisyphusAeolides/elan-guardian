@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.2.4
+Version:        0.2.5
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -37,6 +37,8 @@ install -Dm755 target/release/elan-trace-score %{buildroot}%{_bindir}/elan-trace
 install -Dm644 packaging/elan-guardian.8 %{buildroot}%{_mandir}/man8/elan-guardian.8
 install -Dm644 systemd/elan-guardian-resume.service \
     %{buildroot}%{_unitdir}/elan-guardian-resume.service
+install -Dm644 systemd/elan-guardian-module.service \
+    %{buildroot}%{_unitdir}/elan-guardian-module.service
 install -Dm644 systemd/elan-guardian-watch.service \
     %{buildroot}%{_unitdir}/elan-guardian-watch.service
 install -Dm644 systemd/91-elan-guardian.preset \
@@ -71,6 +73,9 @@ done
 dkms add -m %{name} -v %{version} --rpm_safe_upgrade
 dkms build -m %{name} -v %{version}
 dkms install -m %{name} -v %{version} --force
+if [ "$1" -gt 1 ] && systemctl is-active --quiet elan-guardian-watch.service; then
+    systemctl try-restart elan-guardian-watch.service || :
+fi
 
 %preun
 %systemd_preun elan-guardian-resume.service
@@ -96,10 +101,16 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_bindir}/elan-trace-score
 %{_mandir}/man8/elan-guardian.8*
 %{_unitdir}/elan-guardian-resume.service
+%{_unitdir}/elan-guardian-module.service
 %{_unitdir}/elan-guardian-watch.service
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
+* Sat Aug 01 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.5-1
+- Activate a newly installed DKMS module before starting the recovery monitor
+- Reload only when the running and installed module identities differ
+- Match direct module builds to the target kernel's GCC or LLVM toolchain
+
 * Sat Aug 01 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.4-1
 - Select the supported Rust jump-table flag for the kernel module compiler
 

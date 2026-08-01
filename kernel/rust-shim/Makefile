@@ -17,6 +17,7 @@ OBJCOPY ?= objcopy
 OBJDUMP ?= objdump
 NM ?= nm
 KCONFIG := $(KDIR)/.config
+KERNEL_USES_CLANG := $(shell grep -c '^CONFIG_CC_IS_CLANG=y' $(KCONFIG) 2>/dev/null)
 FUNCTION_PADDING := $(shell sed -n 's/^CONFIG_FUNCTION_PADDING_BYTES=//p' $(KCONFIG) 2>/dev/null)
 RUSTC_SUPPORTS_C_JUMP_TABLES := $(shell RUSTC_BOOTSTRAP=1 $(RUSTC) -C help 2>/dev/null | grep -q 'jump-tables=val' && echo y)
 RUSTFLAGS := \
@@ -39,6 +40,14 @@ RUSTFLAGS := \
 	-C debuginfo=0 \
 	-Z function-sections=no
 
+ifeq ($(origin LLVM),undefined)
+ifeq ($(KERNEL_USES_CLANG),1)
+KBUILD_TOOLCHAIN := LLVM=1
+endif
+else
+KBUILD_TOOLCHAIN := LLVM=$(LLVM)
+endif
+
 ifeq ($(shell grep -c '^CONFIG_MITIGATION_RETHUNK=y' $(KCONFIG) 2>/dev/null),1)
 RUSTFLAGS += -Z function-return=thunk-extern
 endif
@@ -57,7 +66,7 @@ endif
 .PHONY: all clean inspect
 
 all: elan_rs_core.o
-	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
+	$(MAKE) -C $(KDIR) M=$(CURDIR) $(KBUILD_TOOLCHAIN) modules
 
 elan_rs_core.o: lib.rs elan_core.rs
 	RUSTC_BOOTSTRAP=1 $(RUSTC) $(RUSTFLAGS) -o $@ lib.rs
@@ -78,7 +87,7 @@ inspect: all
 	nm -u ./elan_i2c.ko
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(CURDIR) clean
+	$(MAKE) -C $(KDIR) M=$(CURDIR) $(KBUILD_TOOLCHAIN) clean
 	rm -f elan_rs_core.o
 
 endif

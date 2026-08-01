@@ -6,6 +6,7 @@ pub mod consumer;
 pub mod device;
 pub mod diagnose;
 pub mod irq;
+pub mod kernel_module;
 pub mod policy;
 pub mod recover;
 pub mod trace;

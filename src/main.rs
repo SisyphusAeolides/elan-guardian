@@ -1,6 +1,7 @@
 use elan_guardian::device::{affected_thinkpad_p53, discover};
 use elan_guardian::diagnose::analyze_trace;
 use elan_guardian::irq;
+use elan_guardian::kernel_module::{activate, ActivationResult};
 use elan_guardian::recover::{rebind_controller, recover};
 use elan_guardian::trace::{self, RecordOptions};
 use elan_guardian::watch;
@@ -33,9 +34,52 @@ fn run(args: &[OsString]) -> Result<(), String> {
         "record" => record_command(&args[1..])?,
         "analyze" => analyze_command(&args[1..])?,
         "export-features" => export_features(&args[1..])?,
+        "activate-module" => activate_module_command(&args[1..])?,
         "recover" => recover_command(&args[1..])?,
         "watch" => watch_command(&args[1..])?,
         other => return Err(format!("unknown command '{other}' (try --help)")),
+    }
+    Ok(())
+}
+
+fn activate_module_command(args: &[OsString]) -> Result<(), String> {
+    let mut affected_only = false;
+    let mut quiet = false;
+    for arg in args {
+        match arg.to_str() {
+            Some("--affected-only") => affected_only = true,
+            Some("--quiet") => quiet = true,
+            Some(option) => return Err(format!("unknown activate-module option '{option}'")),
+            None => return Err("activate-module arguments must be valid UTF-8".into()),
+        }
+    }
+    if affected_only && !affected_thinkpad_p53(Path::new("/sys")) {
+        return Ok(());
+    }
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("activate-module must run as root".into());
+    }
+    let result = activate(Path::new("/sys")).map_err(|error| error.to_string())?;
+    if !quiet {
+        match result {
+            ActivationResult::Current { srcversion } => {
+                println!("Kernel module already active (srcversion {srcversion})");
+            }
+            ActivationResult::Activated {
+                srcversion,
+                controllers,
+            } => {
+                println!(
+                    "Activated kernel module srcversion {} for {}",
+                    srcversion,
+                    if controllers.is_empty() {
+                        "no bound controllers".to_string()
+                    } else {
+                        controllers.join(", ")
+                    }
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -279,6 +323,7 @@ fn print_help() {
                [--interval-ms MS] [--expect-motion] [--cursor-stalled]\n\
            elan-guardian analyze TRACE.json [--json]\n\
            elan-guardian export-features TRACE.json OUTPUT.dat\n\
+           elan-guardian activate-module [--affected-only] [--quiet]\n\
            elan-guardian recover [--all | --device I2C-ID] [--affected-only]
                [--rebind] [--quiet]
            elan-guardian watch [--affected-only] [--interval-ms MS]",

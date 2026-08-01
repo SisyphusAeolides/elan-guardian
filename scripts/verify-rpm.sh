@@ -27,10 +27,11 @@ trap cleanup EXIT
 binary=$stage/usr/bin/elan-guardian
 scorer=$stage/usr/bin/elan-trace-score
 service=$stage/usr/lib/systemd/system/elan-guardian-resume.service
+module_service=$stage/usr/lib/systemd/system/elan-guardian-module.service
 watch_service=$stage/usr/lib/systemd/system/elan-guardian-watch.service
 
 [[ -x $binary && -x $scorer ]]
-[[ -f $service && -f $watch_service ]]
+[[ -f $service && -f $module_service && -f $watch_service ]]
 [[ -f $stage/usr/lib/systemd/system-preset/91-elan-guardian.preset ]]
 [[ -f $stage/usr/share/man/man8/elan-guardian.8.gz ]]
 [[ -f $stage/usr/share/doc/elan-guardian/formal/agda/ElanGuardian.agda ]]
@@ -41,11 +42,15 @@ watch_service=$stage/usr/lib/systemd/system/elan-guardian-watch.service
 [[ ! -e $stage/usr/lib/systemd/system/elan-guardian.service ]]
 rg -F 'ExecStop=/usr/bin/elan-guardian recover --all --affected-only --quiet' "$service"
 rg -F 'WantedBy=sleep.target' "$service"
+rg -F 'ExecStart=/usr/bin/elan-guardian activate-module --affected-only' "$module_service"
+rg -F 'CapabilityBoundingSet=CAP_SYS_MODULE' "$module_service"
 rg -F 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 100' "$watch_service"
+rg -F 'Requires=elan-guardian-module.service' "$watch_service"
 rg -F 'WantedBy=multi-user.target' "$watch_service"
 
 [[ $("$binary" --version) == "elan-guardian $version" ]]
 "$binary" --help | rg 'record --output TRACE\.json'
+"$binary" --help | rg 'activate-module \[--affected-only\]'
 "$binary" --help | rg 'watch \[--affected-only\]'
 
 readelf -lW "$binary" | rg 'GNU_RELRO'

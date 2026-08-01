@@ -20,7 +20,9 @@ modinfo kernel/rust-shim/elan_i2c.ko
 Requirements are a C kernel-module toolchain, matching kernel-devel headers,
 and stable `rustc`. The build invokes `rustc` directly with kernel code model,
 static relocation, no red zone, no unwinding, and no standard library. It does
-not use or link the kernel Rust support crate.
+not use or link the kernel Rust support crate. For kernels built with Clang,
+the Makefile reads `CONFIG_CC_IS_CLANG` and automatically selects Kbuild's LLVM
+toolchain mode.
 
 The resulting module intentionally has the same name and device aliases as the
 stock driver. Do not load it beside the stock `elan_i2c` module. Installation

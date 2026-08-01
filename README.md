@@ -81,7 +81,9 @@ read-only `runtime_watchdog` sysfs attribute and shown by
 `elan-guardian status`. The manual `recover` attribute remains available as a
 bounded fallback.
 
-On affected ThinkPad P53 systems, `elan-guardian-watch.service` watches that
+On affected ThinkPad P53 systems, `elan-guardian-module.service` first compares
+the running and installed module identities and safely activates the installed
+DKMS module when they differ. Then `elan-guardian-watch.service` watches that
 counter and finds ELAN descriptors already registered in a libinput consumer's
 epoll set. It duplicates those existing file descriptions with `pidfd_getfd`
 only to poll readiness; it never reads, opens, or grabs an evdev node. If a
@@ -134,7 +136,8 @@ does not create a compatible weak-update link.
 ## Packaging
 
 The RPM installs the Rust and Fortran tools, manual page, module source under
-`/usr/src/elan-guardian-0.2.2/rust-shim`, a sleep recovery unit, and the
+`/usr/src/elan-guardian-0.2.5/rust-shim`, a module activation unit, a sleep
+recovery unit, and the
 non-grabbing watchdog monitor. Both recovery units act only when DMI identifies
 an affected ThinkPad P53. Formal sources and the in-tree kernel patch remain
 independently buildable.

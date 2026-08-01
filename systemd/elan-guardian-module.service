@@ -1,0 +1,17 @@
+[Unit]
+Description=Activate the installed ELAN recovery kernel module
+Documentation=man:elan-guardian(8)
+After=systemd-modules-load.service systemd-udev-settle.service
+Before=elan-guardian-watch.service
+PartOf=elan-guardian-watch.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/elan-guardian activate-module --affected-only
+RemainAfterExit=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/sys/bus/i2c/drivers/elan_i2c
+CapabilityBoundingSet=CAP_SYS_MODULE

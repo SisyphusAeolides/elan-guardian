@@ -18,6 +18,7 @@ OBJDUMP ?= objdump
 NM ?= nm
 KCONFIG := $(KDIR)/.config
 FUNCTION_PADDING := $(shell sed -n 's/^CONFIG_FUNCTION_PADDING_BYTES=//p' $(KCONFIG) 2>/dev/null)
+RUSTC_SUPPORTS_C_JUMP_TABLES := $(shell RUSTC_BOOTSTRAP=1 $(RUSTC) -C help 2>/dev/null | grep -q 'jump-tables=val' && echo y)
 RUSTFLAGS := \
 	--edition=2021 \
 	--crate-name elan_rs_core \
@@ -42,7 +43,12 @@ ifeq ($(shell grep -c '^CONFIG_MITIGATION_RETHUNK=y' $(KCONFIG) 2>/dev/null),1)
 RUSTFLAGS += -Z function-return=thunk-extern
 endif
 ifeq ($(shell grep -c '^CONFIG_X86_KERNEL_IBT=y' $(KCONFIG) 2>/dev/null),1)
-RUSTFLAGS += -Z cf-protection=branch -Z no-jump-tables
+RUSTFLAGS += -Z cf-protection=branch
+ifeq ($(RUSTC_SUPPORTS_C_JUMP_TABLES),y)
+RUSTFLAGS += -Cjump-tables=n
+else
+RUSTFLAGS += -Z no-jump-tables
+endif
 endif
 ifneq ($(FUNCTION_PADDING),)
 RUSTFLAGS += -Z patchable-function-entry=$(FUNCTION_PADDING),$(FUNCTION_PADDING)

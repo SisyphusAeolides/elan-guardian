@@ -1,5 +1,5 @@
 NAME := elan-guardian
-VERSION := 0.2.3
+VERSION := 0.2.4
 RPM_TOPDIR ?= $(HOME)/rpmbuild
 
 .PHONY: all rust fortran kmod check formal-check clean dist srpm packaging-check

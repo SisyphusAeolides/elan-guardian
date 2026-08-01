@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.2.5
+Version:        0.2.6
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -70,9 +70,13 @@ done
 %post
 %systemd_post elan-guardian-resume.service
 %systemd_post elan-guardian-watch.service
-dkms add -m %{name} -v %{version} --rpm_safe_upgrade
-dkms build -m %{name} -v %{version}
-dkms install -m %{name} -v %{version} --force
+if dkms add -m %{name} -v %{version} --rpm_safe_upgrade &&
+   dkms build -m %{name} -v %{version} &&
+   dkms install -m %{name} -v %{version} --force; then
+    :
+else
+    echo "elan-guardian: optional DKMS module unavailable; userspace recovery remains enabled" >&2
+fi
 if [ "$1" -gt 1 ] && systemctl is-active --quiet elan-guardian-watch.service; then
     systemctl try-restart elan-guardian-watch.service || :
 fi
@@ -106,6 +110,12 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
+* Sat Aug 01 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.6-1
+- Remove invasive periodic controller probes from the kernel watchdog
+- Export successful report counts and recover only after real report failures
+- Keep userspace recovery available when an optional DKMS build is unsupported
+- Verify the external module against Linux 6.12 and Linux 7.1
+
 * Sat Aug 01 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.5-1
 - Activate a newly installed DKMS module before starting the recovery monitor
 - Reload only when the running and installed module identities differ

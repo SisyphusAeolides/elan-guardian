@@ -1,4 +1,4 @@
-.TH ELAN-GUARDIAN 8 "August 2026" "elan-guardian 0.2.5" "System Administration"
+.TH ELAN-GUARDIAN 8 "August 2026" "elan-guardian 0.2.6" "System Administration"
 .SH NAME
 elan-guardian \- diagnose and recover Elantech I2C input controllers
 .SH SYNOPSIS
@@ -39,15 +39,15 @@ If it fails, the driver is unbound and rebound with bounded retries. The
 option requests that fallback directly.
 .PP
 The supplied kernel patch also provides a runtime health watchdog. It is armed
-only while an Elan input node is open, checks the live transport every five
-seconds, and performs in-place recovery after a failed probe or repeated report
-errors. The watchdog is enabled by default on Lenovo ThinkPad P53 systems and
+only while an Elan input node is open, performs no periodic controller I/O,
+and performs in-place recovery after three consecutive report-read errors.
+The watchdog is enabled by default on Lenovo ThinkPad P53 systems and
 may be enabled for other validated systems with the
 .B elan,runtime-watchdog
 firmware property.
 .PP
 The packaged source in
-.I /usr/src/elan-guardian-0.2.5/rust-shim
+.I /usr/src/elan-guardian-0.2.6/rust-shim
 builds a replacement
 .B elan_i2c.ko
 whose packet decoder, watchdog policy, and recovery state machine are written
@@ -69,7 +69,8 @@ It does nothing when the correct module is already running.
 .TP
 .I /usr/lib/systemd/system/elan-guardian-resume.service
 runs one narrow recovery after resume on affected ThinkPad P53 systems whose
-kernels do not yet contain the watchdog patch.
+kernels do not yet contain the watchdog patch. It defers to the equivalent
+resume unit supplied by libinput-rs when that unit is installed.
 .TP
 .I /usr/lib/systemd/system/elan-guardian-watch.service
 monitors the kernel recovery counter and the readiness of ELAN descriptors
@@ -78,7 +79,7 @@ continuously readable for 750 ms indicates that the consumer stopped draining
 it, so the service rebinds the controller. It duplicates descriptors with
 pidfd_getfd only for polling and never reads, opens, or grabs an evdev node.
 .TP
-.I /usr/src/elan-guardian-0.2.5/rust-shim
+.I /usr/src/elan-guardian-0.2.6/rust-shim
 contains the Rust-core kernel module source and external Kbuild file.
 .SH SECURITY
 The recording path opens evdev read-only and never issues EVIOCGRAB. Recovery

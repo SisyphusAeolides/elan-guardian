@@ -65,8 +65,18 @@ jobs:
           path: artifacts/*
 
   kernel-patch:
-    name: Linux 6.12 patch and Rust-core module
+    name: Linux ${{ matrix.kernel }} Rust-core module
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kernel: "6.12"
+            ref: v6.12
+            check_patch: true
+          - kernel: "7.1"
+            ref: v7.1
+            check_patch: false
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.92.0
@@ -74,12 +84,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y bc bison flex libelf-dev libssl-dev
       - name: Fetch exact upstream source
         run: |
-          git clone --depth=1 --branch v6.12 \
+          git clone --depth=1 --branch '${{ matrix.ref }}' \
             https://github.com/torvalds/linux.git "$RUNNER_TEMP/linux"
       - name: Apply and compile patch
+        if: matrix.check_patch
         run: |
           git -C "$RUNNER_TEMP/linux" apply --check "$GITHUB_WORKSPACE/kernel/0001-input-elan-i2c-add-in-place-recovery.patch"
           git -C "$RUNNER_TEMP/linux" apply "$GITHUB_WORKSPACE/kernel/0001-input-elan-i2c-add-in-place-recovery.patch"
+          cp "$GITHUB_WORKSPACE/kernel/rust-shim/elan_rs_shim.h" \
+            "$RUNNER_TEMP/linux/drivers/input/elan_rs_shim.h"
           make -C "$RUNNER_TEMP/linux" defconfig
           make -C "$RUNNER_TEMP/linux" -j2 \
             drivers/input/mouse/elan_i2c_core.o \
@@ -87,6 +100,11 @@ jobs:
             drivers/input/mouse/elan_i2c_smbus.o
       - name: Compile and link Rust-core module
         run: |
+          make -C "$RUNNER_TEMP/linux" defconfig
+          make -C "$RUNNER_TEMP/linux" -j2 \
+            drivers/input/mouse/elan_i2c_core.o \
+            drivers/input/mouse/elan_i2c_i2c.o \
+            drivers/input/mouse/elan_i2c_smbus.o
           make -C kernel/rust-shim clean KDIR="$RUNNER_TEMP/linux"
           make -C kernel/rust-shim elan_rs_core.o KDIR="$RUNNER_TEMP/linux"
           make -C "$RUNNER_TEMP/linux" M="$GITHUB_WORKSPACE/kernel/rust-shim" elan_i2c.o

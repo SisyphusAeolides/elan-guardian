@@ -42,10 +42,11 @@ watch_service=$stage/usr/lib/systemd/system/elan-guardian-watch.service
 [[ ! -e $stage/usr/lib/systemd/system/elan-guardian.service ]]
 rg -F 'ExecStop=/usr/bin/elan-guardian recover --all --affected-only --quiet' "$service"
 rg -F 'WantedBy=sleep.target' "$service"
+rg -F 'ConditionPathExists=!/usr/lib/systemd/system/libinput-rs-elan-resume.service' "$service"
 rg -F 'ExecStart=/usr/bin/elan-guardian activate-module --affected-only' "$module_service"
 rg -F 'CapabilityBoundingSet=CAP_SYS_MODULE' "$module_service"
 rg -F 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 100' "$watch_service"
-rg -F 'Requires=elan-guardian-module.service' "$watch_service"
+rg -F 'Wants=elan-guardian-module.service' "$watch_service"
 rg -F 'WantedBy=multi-user.target' "$watch_service"
 
 [[ $("$binary" --version) == "elan-guardian $version" ]]

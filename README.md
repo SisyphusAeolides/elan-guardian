@@ -66,31 +66,38 @@ request the hard fallback directly.
 
 ## Automatic prevention and recovery
 
-The kernel patch includes a non-resident delayed-work watchdog. It is enabled
+The kernel patch includes a non-resident workqueue watchdog. It is enabled
 by default on the Lenovo ThinkPad P53 and can be enabled for another validated
 machine through the `elan,runtime-watchdog` firmware property. The watchdog:
 
 - is armed only while at least one Elan input node is open;
-- probes the live transport every five seconds;
 - requests immediate recovery after three consecutive report-read errors;
-- reinitializes in place when a live probe fails; and
-- leaves a healthy but idle controller untouched.
+- performs no periodic controller I/O; and
+- leaves healthy active and idle controllers untouched.
 
-Its state and successful automatic-recovery count are exported through the
-read-only `runtime_watchdog` sysfs attribute and shown by
+Its state, successful report count, current error streak, and automatic-
+recovery count are exported through the read-only `runtime_watchdog` sysfs
+attribute and shown by
 `elan-guardian status`. The manual `recover` attribute remains available as a
 bounded fallback.
 
-On affected ThinkPad P53 systems, `elan-guardian-module.service` first compares
-the running and installed module identities and safely activates the installed
-DKMS module when they differ. Then `elan-guardian-watch.service` watches that
-counter and finds ELAN descriptors already registered in a libinput consumer's
+On affected ThinkPad P53 systems, the optional
+`elan-guardian-module.service` first compares the running and installed module
+identities and safely activates the installed
+DKMS module when they differ. A failed DKMS build never disables the portable
+userspace resume and consumer recovery paths. Then
+`elan-guardian-watch.service` watches that counter and finds ELAN descriptors
+already registered in a libinput consumer's
 epoll set. It duplicates those existing file descriptions with `pidfd_getfd`
 only to poll readiness; it never reads, opens, or grabs an evdev node. If a
 descriptor remains continuously readable for 750 ms, the consumer has stopped
 draining a live kernel stream and the monitor rebinds the controller. A
 five-second cooldown prevents recovery loops while the desktop consumes the
 replacement Touchpad and TrackPoint hotplug events.
+
+When `libinput-rs` supplies its P53-specific resume recovery unit, the guardian
+defers its own equivalent one-shot resume action so the controller is rebound
+exactly once. Live guardian monitoring remains enabled.
 
 ## Build and verify
 
@@ -136,11 +143,16 @@ does not create a compatible weak-update link.
 ## Packaging
 
 The RPM installs the Rust and Fortran tools, manual page, module source under
-`/usr/src/elan-guardian-0.2.5/rust-shim`, a module activation unit, a sleep
+`/usr/src/elan-guardian-0.2.6/rust-shim`, an optional module activation unit, a sleep
 recovery unit, and the
 non-grabbing watchdog monitor. Both recovery units act only when DMI identifies
 an affected ThinkPad P53. Formal sources and the in-tree kernel patch remain
 independently buildable.
+
+The external module is compiled in CI against Linux 6.12 and Linux 7.1 and is
+rebuilt by DKMS for each installed kernel. Kernel APIs are not stable, so an
+unbuildable future kernel falls back to the distribution's `elan_i2c` module
+without failing the package transaction; userspace recovery remains active.
 
 Supported build targets:
 

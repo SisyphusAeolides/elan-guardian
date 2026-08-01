@@ -1,7 +1,7 @@
 [Unit]
 Description=Recover stalled ELAN kernel and libinput consumers
 Documentation=man:elan-guardian(8)
-Requires=elan-guardian-module.service
+Wants=elan-guardian-module.service
 After=systemd-udev-settle.service elan-guardian-module.service
 ConditionPathExists=/sys/bus/i2c/drivers/elan_i2c
 

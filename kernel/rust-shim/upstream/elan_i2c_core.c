@@ -49,7 +49,6 @@
 #define ETP_FWIDTH_REDUCE	90
 #define ETP_FINGER_WIDTH	15
 #define ETP_RETRY_COUNT		3
-#define ETP_WATCHDOG_INTERVAL	msecs_to_jiffies(5000)
 #define ETP_WATCHDOG_REPORT_ERRORS	3
 
 /* quirks to control the device */
@@ -69,8 +68,9 @@ struct elan_tp_data {
 	bool			in_fw_update;
 
 	struct mutex		sysfs_mutex;
-	struct delayed_work	watchdog_work;
+	struct work_struct	watchdog_work;
 	atomic_t		open_count;
+	atomic64_t		report_count;
 	unsigned int		report_errors;
 	unsigned int		watchdog_recoveries;
 	bool			watchdog_enabled;
@@ -181,6 +181,9 @@ static int elan_get_fwinfo(u16 ic_type, u8 iap_version, u16 *validpage_count,
 	case 0x14:
 	case 0x15:
 		*validpage_count = 1024;
+		break;
+	case 0x19:
+		*validpage_count = 2032;
 		break;
 	default:
 		/* unknown ic type clear value */
@@ -666,6 +669,12 @@ static ssize_t elan_sysfs_update_fw(struct device *dev,
 		return error;
 	}
 
+	if (fw->size < data->fw_signature_address + sizeof(signature)) {
+		dev_err(dev, "firmware file too small\n");
+		error = -EBADF;
+		goto out_release_fw;
+	}
+
 	/* Firmware file must match signature data */
 	fw_signature = &fw->data[data->fw_signature_address];
 	if (memcmp(fw_signature, signature, sizeof(signature)) != 0) {
@@ -709,6 +718,7 @@ static ssize_t calibrate_store(struct device *dev,
 	data->mode |= ETP_ENABLE_CALIBRATE;
 	retval = data->ops->set_mode(client, data->mode);
 	if (retval) {
+		data->mode &= ~ETP_ENABLE_CALIBRATE;
 		dev_err(dev, "failed to enable calibration mode: %d\n",
 			retval);
 		goto out;
@@ -841,11 +851,10 @@ static int elan_recover_locked(struct elan_tp_data *data)
 	return 0;
 }
 
-static void elan_queue_watchdog(struct elan_tp_data *data,
-				unsigned long delay)
+static void elan_queue_watchdog(struct elan_tp_data *data)
 {
 	if (data->watchdog_enabled && atomic_read(&data->open_count) > 0)
-		mod_delayed_work(system_wq, &data->watchdog_work, delay);
+		schedule_work(&data->watchdog_work);
 }
 
 static int elan_watchdog_ping(struct elan_tp_data *data)
@@ -866,47 +875,42 @@ static int elan_watchdog_ping(struct elan_tp_data *data)
 static void elan_watchdog_work(struct work_struct *work)
 {
 	struct elan_tp_data *data =
-		container_of(to_delayed_work(work), struct elan_tp_data,
-			     watchdog_work);
+		container_of(work, struct elan_tp_data, watchdog_work);
 	struct device *dev = &data->client->dev;
 	u32 action;
 	int error;
 
 	mutex_lock(&data->sysfs_mutex);
-	disable_irq(data->client->irq);
-	error = elan_watchdog_ping(data);
-	action = elan_rs_watchdog_action(atomic_read(&data->open_count), error,
+	action = elan_rs_watchdog_action(atomic_read(&data->open_count), 0,
 					 READ_ONCE(data->report_errors),
 					 ETP_WATCHDOG_REPORT_ERRORS);
 	if (action == ELAN_RS_WATCHDOG_RECOVER) {
+		disable_irq(data->client->irq);
 		dev_warn(dev,
-			 "runtime health check failed (transport=%d, report-errors=%u); recovering\n",
-			 error, READ_ONCE(data->report_errors));
+			 "report stream failed %u consecutive reads; recovering\n",
+			 READ_ONCE(data->report_errors));
 		error = elan_recover_locked(data);
 		if (error)
 			dev_err(dev, "automatic recovery failed: %d\n", error);
 		else
 			data->watchdog_recoveries++;
+		enable_irq(data->client->irq);
 	}
-	enable_irq(data->client->irq);
 	mutex_unlock(&data->sysfs_mutex);
-
-	elan_queue_watchdog(data, ETP_WATCHDOG_INTERVAL);
 }
 
 static void elan_cancel_watchdog(void *_data)
 {
 	struct elan_tp_data *data = _data;
 
-	cancel_delayed_work_sync(&data->watchdog_work);
+	cancel_work_sync(&data->watchdog_work);
 }
 
 static int elan_input_open(struct input_dev *input)
 {
 	struct elan_tp_data *data = input_get_drvdata(input);
 
-	if (atomic_inc_return(&data->open_count) == 1)
-		elan_queue_watchdog(data, ETP_WATCHDOG_INTERVAL);
+	atomic_inc(&data->open_count);
 
 	return 0;
 }
@@ -915,10 +919,8 @@ static void elan_input_close(struct input_dev *input)
 {
 	struct elan_tp_data *data = input_get_drvdata(input);
 
-	if (atomic_dec_and_test(&data->open_count)) {
-		cancel_delayed_work_sync(&data->watchdog_work);
-		elan_queue_watchdog(data, ETP_WATCHDOG_INTERVAL);
-	}
+	if (atomic_dec_and_test(&data->open_count))
+		cancel_work_sync(&data->watchdog_work);
 }
 
 static ssize_t runtime_watchdog_show(struct device *dev,
@@ -926,8 +928,11 @@ static ssize_t runtime_watchdog_show(struct device *dev,
 {
 	struct elan_tp_data *data = dev_get_drvdata(dev);
 
-	return sysfs_emit(buf, "enabled=%u recoveries=%u\n",
-			  data->watchdog_enabled, data->watchdog_recoveries);
+	return sysfs_emit(buf,
+			  "enabled=%u recoveries=%u reports=%lld report_errors=%u\n",
+			  data->watchdog_enabled, data->watchdog_recoveries,
+			  (long long)atomic64_read(&data->report_count),
+			  READ_ONCE(data->report_errors));
 }
 
 static ssize_t recover_store(struct device *dev,
@@ -1008,6 +1013,7 @@ static ssize_t acquire_store(struct device *dev, struct device_attribute *attr,
 	data->mode |= ETP_ENABLE_CALIBRATE;
 	retval = data->ops->set_mode(data->client, data->mode);
 	if (retval) {
+		data->mode &= ~ETP_ENABLE_CALIBRATE;
 		dev_err(dev, "Failed to enable calibration mode to get baseline: %d\n",
 			retval);
 		goto out;
@@ -1018,7 +1024,7 @@ static ssize_t acquire_store(struct device *dev, struct device_attribute *attr,
 	retval = data->ops->get_baseline_data(data->client, true,
 					      &data->max_baseline);
 	if (retval) {
-		dev_err(dev, "Failed to read max baseline form device: %d\n",
+		dev_err(dev, "Failed to read max baseline from device: %d\n",
 			retval);
 		goto out_disable_calibrate;
 	}
@@ -1026,7 +1032,7 @@ static ssize_t acquire_store(struct device *dev, struct device_attribute *attr,
 	retval = data->ops->get_baseline_data(data->client, false,
 					      &data->min_baseline);
 	if (retval) {
-		dev_err(dev, "Failed to read min baseline form device: %d\n",
+		dev_err(dev, "Failed to read min baseline from device: %d\n",
 			retval);
 		goto out_disable_calibrate;
 	}
@@ -1274,10 +1280,11 @@ static irqreturn_t elan_isr(int irq, void *dev_id)
 					    report_errors,
 					    ETP_WATCHDOG_REPORT_ERRORS) ==
 					    ELAN_RS_WATCHDOG_RECOVER)
-			elan_queue_watchdog(data, 0);
+			elan_queue_watchdog(data);
 		goto out;
 	}
 	WRITE_ONCE(data->report_errors, 0);
+	atomic64_inc(&data->report_count);
 
 	context.dev = &data->client->dev;
 	context.touchpad = data->input;
@@ -1447,8 +1454,9 @@ static int elan_probe(struct i2c_client *client)
 	data->client = client;
 	init_completion(&data->fw_completion);
 	mutex_init(&data->sysfs_mutex);
-	INIT_DELAYED_WORK(&data->watchdog_work, elan_watchdog_work);
+	INIT_WORK(&data->watchdog_work, elan_watchdog_work);
 	atomic_set(&data->open_count, 0);
+	atomic64_set(&data->report_count, 0);
 	data->watchdog_enabled =
 		device_property_read_bool(dev, "elan,runtime-watchdog") ||
 		dmi_check_system(elan_runtime_watchdog_dmi);
@@ -1571,12 +1579,10 @@ static int elan_suspend(struct device *dev)
 	 * complete before we attempt to bring the device into low[er]
 	 * power mode.
 	 */
-	cancel_delayed_work_sync(&data->watchdog_work);
+	cancel_work_sync(&data->watchdog_work);
 	ret = mutex_lock_interruptible(&data->sysfs_mutex);
-	if (ret) {
-		elan_queue_watchdog(data, ETP_WATCHDOG_INTERVAL);
+	if (ret)
 		return ret;
-	}
 
 	disable_irq(client->irq);
 
@@ -1599,8 +1605,6 @@ err:
 	if (ret)
 		enable_irq(client->irq);
 	mutex_unlock(&data->sysfs_mutex);
-	if (ret)
-		elan_queue_watchdog(data, ETP_WATCHDOG_INTERVAL);
 	return ret;
 }
 
@@ -1630,7 +1634,6 @@ static int elan_resume(struct device *dev)
 
 err:
 	enable_irq(data->client->irq);
-	elan_queue_watchdog(data, ETP_WATCHDOG_INTERVAL);
 	return error;
 }
 

@@ -163,6 +163,10 @@ mod tests {
     #[test]
     fn parses_runtime_watchdog_status() {
         assert_eq!(recovery_count("enabled=1 recoveries=6"), Some(6));
+        assert_eq!(
+            recovery_count("enabled=1 recoveries=7 reports=4219 report_errors=0"),
+            Some(7)
+        );
         assert_eq!(recovery_count("enabled=0 recoveries=0\n"), Some(0));
         assert_eq!(recovery_count("unavailable"), None);
     }

@@ -6,9 +6,10 @@ management, firmware handling, and module metadata remain behind a C ABI shim.
 The `#![no_std]` Rust core owns packet decoding, watchdog decisions, and the
 bounded recovery state machine.
 
-The C transport sources are derived from Linux v6.12 and carry their upstream
+The C transport sources use Linux v6.12-compatible syntax, carry the
+substantive upstream ELAN fixes through Linux v7.1, and retain their upstream
 GPL-2.0-only notices. The watchdog changes match the sibling kernel patch in
-this repository.
+this repository. CI compiles the external module against both kernel lines.
 
 Build for the running kernel:
 
@@ -24,7 +25,8 @@ not use or link the kernel Rust support crate. For kernels built with Clang,
 the Makefile reads `CONFIG_CC_IS_CLANG` and automatically selects Kbuild's LLVM
 toolchain mode.
 
-The resulting module intentionally has the same name and device aliases as the
-stock driver. Do not load it beside the stock `elan_i2c` module. Installation
-must preserve a known-good module and initramfs so the change remains
-recoverable.
+The resulting optional module intentionally has the same name and device
+aliases as the stock driver. Do not load it beside the stock `elan_i2c`
+module. Installation must preserve a known-good module and initramfs so the change remains
+recoverable. If a future kernel cannot build the optional module, the packaged
+userspace recovery continues with the distribution driver.

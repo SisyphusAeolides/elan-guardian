@@ -4,6 +4,7 @@ Documentation=man:elan-guardian(8)
 DefaultDependencies=no
 Before=sleep.target
 StopWhenUnneeded=yes
+ConditionPathExists=!/usr/lib/systemd/system/libinput-rs-elan-resume.service
 
 [Service]
 Type=oneshot

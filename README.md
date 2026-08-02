@@ -28,6 +28,23 @@ opening or consuming evdev events.
 - `kernel/` also contains an upstream-oriented Linux patch that embeds the
   same health policy in the in-tree driver.
 
+## Install on Arch
+
+Add the Sisyphus repository to `/etc/pacman.conf`:
+
+```ini
+[sisyphus]
+SigLevel = Optional TrustAll
+Server = https://sisyphusaeolides.github.io/Sisyphus-Repo/$arch
+```
+
+Then install the userspace tools:
+
+```bash
+sudo pacman -Syy
+sudo pacman -S elan-guardian
+```
+
 ## Diagnose a stalled cursor
 
 When the cursor is stalled, move the touchpad or TrackPoint continuously while
@@ -83,8 +100,8 @@ bounded fallback.
 
 On affected ThinkPad P53 systems, the optional
 `elan-guardian-module.service` first compares the running and installed module
-identities and safely activates the installed
-DKMS module when they differ. A failed DKMS build never disables the portable
+identities and safely activates the installed external module when they differ.
+A failed module build never disables the portable
 userspace resume and consumer recovery paths. Then
 `elan-guardian-watch.service` watches that counter and finds ELAN descriptors
 already registered in a libinput consumer's
@@ -113,7 +130,7 @@ installed.
 Build the replacement module for the running kernel with:
 
 ```bash
-sudo dnf install "kernel-devel-$(uname -r)" binutils gcc make rust
+sudo pacman -S --needed linux-headers binutils gcc make rust
 make kmod
 modinfo kernel/rust-shim/elan_i2c.ko
 ```
@@ -129,10 +146,9 @@ To stage it without overwriting the distribution module:
 ```bash
 release=$(uname -r)
 sudo install -Dm644 kernel/rust-shim/elan_i2c.ko \
-  "/lib/modules/$release/updates/elan-guardian/elan_i2c.ko"
-sudo depmod -a "$release"
-printf '%s\n' "/lib/modules/$release/updates/elan-guardian/elan_i2c.ko" | \
-  sudo weak-modules --add-modules --no-initramfs
+  "/usr/lib/modules/$release/updates/elan-guardian/elan_i2c.ko"
+sudo depmod "$release"
+sudo mkinitcpio -P
 modprobe -D elan_i2c
 ```
 
@@ -140,31 +156,26 @@ Reboot to activate the staged module. The stock module remains in its original
 location as the rollback copy. Rebuild for a new kernel whenever kABI checking
 does not create a compatible weak-update link.
 
-## Packaging
+## Arch packaging
 
-The RPM installs the Rust and Fortran tools, manual page, module source under
-`/usr/src/elan-guardian-0.2.6/rust-shim`, an optional module activation unit, a sleep
-recovery unit, and the
+The Arch package installs the Rust and Fortran tools, manual page, an optional
+module activation unit, a sleep recovery unit, and the
 non-grabbing watchdog monitor. Both recovery units act only when DMI identifies
 an affected ThinkPad P53. Formal sources and the in-tree kernel patch remain
 independently buildable.
 
-The external module is compiled in CI against Linux 6.12 and Linux 7.1 and is
-rebuilt by DKMS for each installed kernel. Kernel APIs are not stable, so an
+The external module is compiled in CI against Linux 6.12 and Linux 7.1 and can
+be rebuilt for each installed kernel. Kernel APIs are not stable, so an
 unbuildable future kernel falls back to the distribution's `elan_i2c` module
 without failing the package transaction; userspace recovery remains active.
 
-Supported build targets:
-
-- Fedora 44
-- Fedora Rawhide
-- EPEL 9 and EPEL 10
-- RHEL 9 and RHEL 10
+The supported packaging target is x86_64 Arch Linux and compatible Arch-based
+distributions.
 
 ## Kernel integration
 
-Current RHEL kernels do not enable Rust kernel modules, and neither Fortran,
-Idris, nor Agda is suitable for Linux IRQ context. The hybrid module therefore
+Neither Fortran, Idris, nor Agda is suitable for Linux IRQ context. The hybrid
+module therefore
 links a freestanding no_std Rust object into an ordinary C-registered kernel
 module. C owns only the Linux I2C/SMBus, input, IRQ, firmware, power-management,
 and module ABI boundary; Rust decodes reports and controls watchdog/recovery

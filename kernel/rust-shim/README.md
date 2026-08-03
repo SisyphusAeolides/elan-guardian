@@ -30,25 +30,3 @@ aliases as the stock driver. Do not load it beside the stock `elan_i2c`
 module. Installation must preserve a known-good module and initramfs so the change remains
 recoverable. If a future kernel cannot build the optional module, the packaged
 userspace recovery continues with the distribution driver.
-
-## Current ArachOS integration status
-
-This project is maintained as part of the ArachOS production graph. Its role is
-the kernel recovery shim and its explicit driver boundary..
-
-CI and release evidence are evaluated on immutable revisions. Hardware support
-is reported by bounded route and support level; this README does not claim
-universal native support. Gate 3 requires signed hardware identity, target
-kernel provenance, package authority, health checks, rollback behavior, and
-representative physical-hardware evidence before production qualification.
-
-## Current ArachOS integration status
-
-This project is maintained as part of the ArachOS production graph. Its role is
-the kernel recovery shim and its explicit driver boundary.
-
-CI and release evidence are evaluated on immutable revisions. Hardware support
-is reported by bounded route and support level; this README does not claim
-universal native support. Gate 3 requires signed hardware identity, target
-kernel provenance, package authority, health checks, rollback behavior, and
-representative physical-hardware evidence before production qualification.

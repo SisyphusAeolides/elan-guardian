@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.2.6
+Version:        0.2.7
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -122,7 +122,9 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
-* Sat Aug 01 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.6-1
+* Mon Aug 03 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.7-1
+- Lower elan-guardian-watch poll interval to 50ms for AGY stall detection
+- Add AGY-specific in-place ELAN recovery and udev-triggered rebind path
 - Remove invasive periodic controller probes from the kernel watchdog
 - Export successful report counts and recover only after real report failures
 - Keep userspace recovery available when an optional DKMS build is unsupported

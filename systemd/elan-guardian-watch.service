@@ -7,7 +7,7 @@ ConditionPathExists=/sys/bus/i2c/drivers/elan_i2c
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 100
+ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 50
 Restart=on-failure
 RestartSec=2s
 NoNewPrivileges=yes

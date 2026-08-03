@@ -33,13 +33,19 @@ packaging-check:
 	test -f systemd/elan-guardian-resume.service
 	test -f systemd/elan-guardian-module.service
 	test -f systemd/elan-guardian-watch.service
+	test -f systemd/elan-guardian-watch.service.d/50-interval.conf
+	test -f systemd/elan-i2c-recover.service
+	test -f systemd/99-elan-i2c-recover.rules
 	test -f packaging/elan-guardian.8
 	grep -q '^Version:[[:space:]]*$(VERSION)$$' elan-guardian.spec
 	grep -q 'ExecStop=/usr/bin/elan-guardian recover --all --affected-only --quiet' systemd/elan-guardian-resume.service
 	grep -q 'ConditionPathExists=!/usr/lib/systemd/system/libinput-rs-elan-resume.service' systemd/elan-guardian-resume.service
 	grep -q 'ExecStart=/usr/bin/elan-guardian activate-module --affected-only' systemd/elan-guardian-module.service
 	grep -q 'Wants=elan-guardian-module.service' systemd/elan-guardian-watch.service
-	grep -q 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 100' systemd/elan-guardian-watch.service
+	grep -q 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 50' systemd/elan-guardian-watch.service
+	grep -q 'ExecStart=-/usr/bin/sh -c' systemd/elan-i2c-recover.service
+	grep -q 'KERNEL=="13-0015"' systemd/99-elan-i2c-recover.rules
+	grep -q 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 50' systemd/elan-guardian-watch.service.d/50-interval.conf
 
 dist:
 	mkdir -p target/dist

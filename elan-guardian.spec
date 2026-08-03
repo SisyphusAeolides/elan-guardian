@@ -41,6 +41,12 @@ install -Dm644 systemd/elan-guardian-module.service \
     %{buildroot}%{_unitdir}/elan-guardian-module.service
 install -Dm644 systemd/elan-guardian-watch.service \
     %{buildroot}%{_unitdir}/elan-guardian-watch.service
+install -Dm644 systemd/elan-guardian-watch.service.d/50-interval.conf \
+    %{buildroot}%{_unitdir}/elan-guardian-watch.service.d/50-interval.conf
+install -Dm644 systemd/elan-i2c-recover.service \
+    %{buildroot}%{_unitdir}/elan-i2c-recover.service
+install -Dm644 systemd/99-elan-i2c-recover.rules \
+    %{buildroot}%{_udevrulesdir}/99-elan-i2c-recover.rules
 install -Dm644 systemd/91-elan-guardian.preset \
     %{buildroot}%{_presetdir}/91-elan-guardian.preset
 install -Dm644 formal/agda/ElanGuardian.agda \
@@ -70,6 +76,7 @@ done
 %post
 %systemd_post elan-guardian-resume.service
 %systemd_post elan-guardian-watch.service
+%systemd_post elan-i2c-recover.service
 if dkms add -m %{name} -v %{version} --rpm_safe_upgrade &&
    dkms build -m %{name} -v %{version} &&
    dkms install -m %{name} -v %{version} --force; then
@@ -84,11 +91,13 @@ fi
 %preun
 %systemd_preun elan-guardian-resume.service
 %systemd_preun elan-guardian-watch.service
+%systemd_preun elan-i2c-recover.service
 dkms remove -m %{name} -v %{version} --all --rpm_safe_upgrade || true
 
 %postun
 %systemd_postun_with_restart elan-guardian-resume.service
 %systemd_postun_with_restart elan-guardian-watch.service
+%systemd_postun_with_restart elan-i2c-recover.service
 
 %check
 CARGO_NET_OFFLINE=true cargo test --frozen --all-targets
@@ -107,6 +116,9 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_unitdir}/elan-guardian-resume.service
 %{_unitdir}/elan-guardian-module.service
 %{_unitdir}/elan-guardian-watch.service
+%{_unitdir}/elan-guardian-watch.service.d/50-interval.conf
+%{_unitdir}/elan-i2c-recover.service
+%{_udevrulesdir}/99-elan-i2c-recover.rules
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog

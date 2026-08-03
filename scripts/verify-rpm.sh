@@ -29,9 +29,13 @@ scorer=$stage/usr/bin/elan-trace-score
 service=$stage/usr/lib/systemd/system/elan-guardian-resume.service
 module_service=$stage/usr/lib/systemd/system/elan-guardian-module.service
 watch_service=$stage/usr/lib/systemd/system/elan-guardian-watch.service
+recovery_service=$stage/usr/lib/systemd/system/elan-i2c-recover.service
+recovery_rule=$stage/usr/lib/udev/rules.d/99-elan-i2c-recover.rules
+watch_interval=$stage/usr/lib/systemd/system/elan-guardian-watch.service.d/50-interval.conf
 
 [[ -x $binary && -x $scorer ]]
 [[ -f $service && -f $module_service && -f $watch_service ]]
+[[ -f $recovery_service && -f $recovery_rule && -f $watch_interval ]]
 [[ -f $stage/usr/lib/systemd/system-preset/91-elan-guardian.preset ]]
 [[ -f $stage/usr/share/man/man8/elan-guardian.8.gz ]]
 [[ -f $stage/usr/share/doc/elan-guardian/formal/agda/ElanGuardian.agda ]]
@@ -45,7 +49,8 @@ rg -F 'WantedBy=sleep.target' "$service"
 rg -F 'ConditionPathExists=!/usr/lib/systemd/system/libinput-rs-elan-resume.service' "$service"
 rg -F 'ExecStart=/usr/bin/elan-guardian activate-module --affected-only' "$module_service"
 rg -F 'CapabilityBoundingSet=CAP_SYS_MODULE' "$module_service"
-rg -F 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 100' "$watch_service"
+rg -F 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 50' "$watch_service"
+rg -F '/usr/bin/elan-guardian watch --affected-only --interval-ms 50' "$watch_interval"
 rg -F 'Wants=elan-guardian-module.service' "$watch_service"
 rg -F 'WantedBy=multi-user.target' "$watch_service"
 
@@ -63,3 +68,5 @@ readelf -nW "$binary" | rg 'Build ID:'
 fixture=$stage/features.dat
 printf '%s\n' '0 0 1 1' >"$fixture"
 [[ $("$scorer" "$fixture") == transport-stalled ]]
+rg -F 'recover --device 13-0015 --rebind --quiet' "$recovery_service"
+rg -F '99-elan-i2c-recover.rules' "$recovery_rule"

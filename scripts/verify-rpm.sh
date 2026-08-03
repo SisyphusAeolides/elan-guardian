@@ -69,4 +69,4 @@ fixture=$stage/features.dat
 printf '%s\n' '0 0 1 1' >"$fixture"
 [[ $("$scorer" "$fixture") == transport-stalled ]]
 rg -F 'recover --device 13-0015 --rebind --quiet' "$recovery_service"
-rg -F '99-elan-i2c-recover.rules' "$recovery_rule"
+rg -F 'ACTION=="unbind"' "$recovery_rule"

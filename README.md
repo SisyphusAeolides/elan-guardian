@@ -28,6 +28,13 @@ opening or consuming evdev events.
 - `kernel/` also contains an upstream-oriented Linux patch that embeds the
   same health policy in the in-tree driver.
 
+## Install on DNF/RPM based systems
+
+```bash
+sudo dnf copr enable sisyphuscode/elan-guardian
+sudo dnf install elan-guardian
+sudo systemctl enable --now elan-guardian-resume.service
+```
 ## Install on Arch
 
 Add the Sisyphus repository to `/etc/pacman.conf`:

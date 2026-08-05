@@ -24,6 +24,12 @@ impl RecoveryObserver {
     pub fn mark(&mut self, id: &str, recoveries: u64) {
         self.seen.insert(id.to_owned(), recoveries);
     }
+
+    pub fn observe_recovery(&mut self, id: &str, recoveries: u64) -> bool {
+        let previous = self.previous(id);
+        self.mark(id, recoveries);
+        recoveries > previous
+    }
 }
 
 pub fn recovery_count(status: &str) -> Option<u64> {
@@ -55,8 +61,7 @@ pub fn monitor(sysfs_root: &Path, interval: Duration) -> io::Result<()> {
                     else {
                         continue;
                     };
-                    let previous = observer.previous(&controller.id);
-                    if count > previous {
+                    if observer.observe_recovery(&controller.id, count) {
                         eprintln!(
                             "elan-guardian: kernel recovery observed on {}; rebinding controller",
                             controller.id
@@ -175,8 +180,10 @@ mod tests {
     fn observes_each_recovery_generation_once() {
         let mut observer = RecoveryObserver::default();
         assert_eq!(observer.previous("7-0015"), 0);
-        observer.mark("7-0015", 6);
+        assert!(observer.observe_recovery("7-0015", 6));
         assert_eq!(observer.previous("7-0015"), 6);
+        assert!(!observer.observe_recovery("7-0015", 6));
+        assert!(observer.observe_recovery("7-0015", 7));
         observer.mark("7-0015", 0);
         assert_eq!(observer.previous("7-0015"), 0);
     }

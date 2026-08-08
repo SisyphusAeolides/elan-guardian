@@ -87,7 +87,11 @@ inspect: all
 	nm -u ./elan_i2c.ko
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(CURDIR) $(KBUILD_TOOLCHAIN) clean
+	@if [ -d "$(KDIR)" ]; then \
+		$(MAKE) -C "$(KDIR)" M="$(CURDIR)" $(KBUILD_TOOLCHAIN) clean; \
+	else \
+		rm -f -- *.ko *.mod *.mod.c *.o .*.cmd Module.symvers modules.order; \
+	fi
 	rm -f elan_rs_core.o
 
 endif

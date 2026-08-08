@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.2.9
+Version:        0.2.10
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -125,6 +125,9 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
+* Sat Aug 08 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.10-1
+- Clean optional kernel artifacts without requiring host kernel headers
+
 * Sat Aug 08 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.9-1
 - Add native Ubuntu packaging and cross-distribution command discovery
 - Require the runtime toolchain used by the optional DKMS module

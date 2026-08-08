@@ -1,8 +1,9 @@
-elan-guardian (0.2.9-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
+elan-guardian (0.2.10-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
 
   * Initial release for the Corinth PPA.
   * Discover kmod tools through the cross-distribution service path.
   * Package the userspace recovery stack and fail-open DKMS module sources.
   * Install hardened systemd units, udev recovery rules, and manual pages.
+  * Clean source builds without requiring headers for the builder host kernel.
 
  -- Kenny Glowner <SisyphusAeolides@pm.me>  Sat, 08 Aug 2026 00:00:00 -0500

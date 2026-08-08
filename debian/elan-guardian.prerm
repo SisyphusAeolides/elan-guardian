@@ -3,7 +3,7 @@ set -e
 
 case "$1" in
     remove|upgrade|deconfigure)
-        dkms remove -m elan-guardian -v 0.2.9 --all || true
+        dkms remove -m elan-guardian -v 0.2.10 --all || true
         ;;
 esac
 

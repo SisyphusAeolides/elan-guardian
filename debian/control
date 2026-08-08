@@ -1,0 +1,35 @@
+Source: elan-guardian
+Section: admin
+Priority: optional
+Maintainer: Kenny Glowner <SisyphusAeolides@pm.me>
+Build-Depends:
+ debhelper-compat (= 13),
+ cargo (>= 1.75),
+ rustc (>= 1.75),
+ gcc,
+ gfortran
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/SisyphusAeolides/elan-guardian
+Vcs-Git: https://github.com/SisyphusAeolides/elan-guardian.git
+Vcs-Browser: https://github.com/SisyphusAeolides/elan-guardian
+
+Package: elan-guardian
+Architecture: amd64
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+ binutils,
+ dkms (>= 3.0.11),
+ kmod,
+ rustc (>= 1.75),
+ systemd
+Description: Elantech I2C diagnostics and bounded recovery
+ Elan Guardian records IRQ and evdev activity to distinguish transport,
+ kernel-driver, and userspace input failures before changing device state.
+ It can recover controllers already bound to elan_i2c without grabbing input
+ devices or creating a virtual pointer.
+ .
+ The package includes guarded resume and consumer monitoring units, a Fortran
+ trace classifier, and an optional Rust-core DKMS replacement for elan_i2c.
+ DKMS failures do not disable the userspace recovery paths.

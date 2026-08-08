@@ -1,0 +1,70 @@
+#!/usr/bin/make -f
+
+export CARGO_PROFILE_RELEASE_DEBUG = 2
+
+CARGO_FLAGS := --locked
+ifneq ($(wildcard vendor),)
+CARGO_FLAGS += --offline
+endif
+
+PACKAGE_ROOT := $(CURDIR)/debian/elan-guardian
+DKMS_ROOT := $(PACKAGE_ROOT)/usr/src/elan-guardian-0.2.9
+
+%:
+	dh $@
+
+override_dh_clean:
+	dh_clean -Xvendor
+
+override_dh_auto_build:
+	cargo build $(CARGO_FLAGS) --release
+	$(MAKE) fortran
+
+override_dh_auto_test:
+	cargo test $(CARGO_FLAGS) --all-targets
+	scripts/test-fortran.sh target/release/elan-trace-score
+	$(MAKE) packaging-check
+
+override_dh_auto_install:
+	install -Dm0755 target/release/elan-guardian \
+		$(PACKAGE_ROOT)/usr/bin/elan-guardian
+	install -Dm0755 target/release/elan-trace-score \
+		$(PACKAGE_ROOT)/usr/bin/elan-trace-score
+	install -Dm0644 packaging/elan-guardian.8 \
+		$(PACKAGE_ROOT)/usr/share/man/man8/elan-guardian.8
+	install -Dm0644 systemd/elan-guardian-resume.service \
+		$(PACKAGE_ROOT)/usr/lib/systemd/system/elan-guardian-resume.service
+	install -Dm0644 systemd/elan-guardian-module.service \
+		$(PACKAGE_ROOT)/usr/lib/systemd/system/elan-guardian-module.service
+	install -Dm0644 systemd/elan-guardian-watch.service \
+		$(PACKAGE_ROOT)/usr/lib/systemd/system/elan-guardian-watch.service
+	install -Dm0644 systemd/elan-guardian-watch.service.d/50-interval.conf \
+		$(PACKAGE_ROOT)/usr/lib/systemd/system/elan-guardian-watch.service.d/50-interval.conf
+	install -Dm0644 systemd/elan-i2c-recover.service \
+		$(PACKAGE_ROOT)/usr/lib/systemd/system/elan-i2c-recover.service
+	install -Dm0644 systemd/99-elan-i2c-recover.rules \
+		$(PACKAGE_ROOT)/usr/lib/udev/rules.d/99-elan-i2c-recover.rules
+	install -Dm0644 systemd/91-elan-guardian.preset \
+		$(PACKAGE_ROOT)/usr/lib/systemd/system-preset/91-elan-guardian.preset
+	install -Dm0644 formal/agda/ElanGuardian.agda \
+		$(PACKAGE_ROOT)/usr/share/doc/elan-guardian/formal/agda/ElanGuardian.agda
+	install -Dm0644 formal/idris/ElanPolicy.idr \
+		$(PACKAGE_ROOT)/usr/share/doc/elan-guardian/formal/idris/ElanPolicy.idr
+	install -Dm0644 kernel/0001-input-elan-i2c-add-in-place-recovery.patch \
+		$(PACKAGE_ROOT)/usr/share/doc/elan-guardian/kernel/0001-input-elan-i2c-add-in-place-recovery.patch
+	install -Dm0644 dkms.conf $(DKMS_ROOT)/dkms.conf
+	install -d $(DKMS_ROOT)/rust-shim
+	cp -a kernel/rust-shim/Makefile kernel/rust-shim/README.md \
+		kernel/rust-shim/UPSTREAM kernel/rust-shim/elan_core.rs \
+		kernel/rust-shim/elan_rs_shim.c kernel/rust-shim/elan_rs_shim.h \
+		kernel/rust-shim/lib.rs kernel/rust-shim/upstream \
+		$(DKMS_ROOT)/rust-shim/
+	set -e; for crate in vendor/*; do \
+		test -d "$$crate" || continue; \
+		destination=$(PACKAGE_ROOT)/usr/share/doc/elan-guardian/third-party/$$(basename "$$crate"); \
+		for license in "$$crate"/LICENSE* "$$crate"/COPYING* "$$crate"/UNLICENSE*; do \
+			test -f "$$license" || continue; \
+			install -d "$$destination"; \
+			install -m0644 "$$license" "$$destination/"; \
+		done; \
+	done

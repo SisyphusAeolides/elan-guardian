@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.2.8
+Version:        0.2.9
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -11,6 +11,9 @@ BuildRequires:  rust >= 1.75
 BuildRequires:  gcc-gfortran
 BuildRequires:  systemd-rpm-macros
 Requires:       dkms
+Requires:       binutils
+Requires:       kmod
+Requires:       rust >= 1.75
 
 %description
 Elan Guardian records Elantech IRQ and evdev activity to distinguish transport,
@@ -122,6 +125,11 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
+* Sat Aug 08 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.9-1
+- Add native Ubuntu packaging and cross-distribution command discovery
+- Require the runtime toolchain used by the optional DKMS module
+- Document required package and repository signature verification
+
 * Wed Aug 05 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.8-1
 - Prevent repeated controller rebind attempts after a failed recovery
 

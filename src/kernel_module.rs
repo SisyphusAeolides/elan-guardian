@@ -7,8 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const MODULE_NAME: &str = "elan_i2c";
-const MODINFO: &str = "/usr/bin/modinfo";
-const MODPROBE: &str = "/usr/bin/modprobe";
+const MODINFO: &str = "modinfo";
+const MODPROBE: &str = "modprobe";
 const MODULE_SRCVERSION_RELATIVE_PATH: &str = "module/elan_i2c/srcversion";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

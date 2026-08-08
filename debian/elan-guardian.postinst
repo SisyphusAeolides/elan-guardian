@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        if ! dkms status -m elan-guardian -v 0.2.9 2>/dev/null | grep -q .; then
+            if ! dkms add -m elan-guardian -v 0.2.9; then
+                echo "elan-guardian: optional DKMS registration failed; userspace recovery remains available" >&2
+            fi
+        fi
+        if ! dkms autoinstall -m elan-guardian -v 0.2.9; then
+            echo "elan-guardian: optional DKMS build failed; using the distribution elan_i2c driver" >&2
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

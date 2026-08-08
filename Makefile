@@ -1,8 +1,8 @@
 NAME := elan-guardian
-VERSION := 0.2.8
+VERSION := 0.2.9
 RPM_TOPDIR ?= $(HOME)/rpmbuild
 
-.PHONY: all rust fortran kmod check formal-check clean dist srpm packaging-check
+.PHONY: all rust fortran kmod check formal-check clean dist srpm packaging-check deb ppa-source ppa-source-unsigned
 
 all: rust fortran
 
@@ -30,6 +30,11 @@ formal-check:
 
 packaging-check:
 	test -f elan-guardian.spec
+	test -f debian/control
+	test -f debian/changelog
+	test -x debian/rules
+	test -x scripts/build-deb-source.sh
+	test -x scripts/verify-deb.sh
 	test -f systemd/elan-guardian-resume.service
 	test -f systemd/elan-guardian-module.service
 	test -f systemd/elan-guardian-watch.service
@@ -46,6 +51,17 @@ packaging-check:
 	grep -q 'ExecStart=-/usr/bin/sh -c' systemd/elan-i2c-recover.service
 	grep -q 'KERNEL=="13-0015"' systemd/99-elan-i2c-recover.rules
 	grep -q 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 50' systemd/elan-guardian-watch.service.d/50-interval.conf
+	grep -q '^PACKAGE_VERSION="$(VERSION)"$$' dkms.conf
+	grep -q '^elan-guardian ($(VERSION)-1~ppa1~ubuntu26.04.1)' debian/changelog
+
+deb:
+	dpkg-buildpackage --build=binary --no-sign
+
+ppa-source:
+	scripts/build-deb-source.sh
+
+ppa-source-unsigned:
+	scripts/build-deb-source.sh --unsigned
 
 dist:
 	mkdir -p target/dist

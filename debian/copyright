@@ -1,0 +1,39 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: elan-guardian
+Source: https://github.com/SisyphusAeolides/elan-guardian
+
+Files: *
+Copyright: 2026 Kenny Glowner
+License: GPL-2.0-only
+ This program is free software; you can redistribute it and/or modify it under
+ the terms of the GNU General Public License version 2 as published by the Free
+ Software Foundation.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 2 can be found in /usr/share/common-licenses/GPL-2.
+
+Files: vendor/itoa/* vendor/libc/* vendor/proc-macro2/* vendor/quote/*
+ vendor/serde/* vendor/serde_core/* vendor/serde_derive/* vendor/serde_json/*
+ vendor/syn/*
+Copyright: respective upstream authors
+License: MIT or Apache-2.0
+ The complete license texts are included in each vendored crate's LICENSE-MIT
+ and LICENSE-APACHE files.
+
+Files: vendor/memchr/*
+Copyright: respective upstream authors
+License: Unlicense or MIT
+ The complete license texts are included in the vendored crate's UNLICENSE and
+ LICENSE-MIT files.
+
+Files: vendor/unicode-ident/*
+Copyright: respective upstream authors and Unicode, Inc.
+License: (MIT or Apache-2.0) and Unicode-3.0
+ The complete license texts are included in the vendored crate's LICENSE-MIT,
+ LICENSE-APACHE, and LICENSE-UNICODE files.
+
+Files: vendor/zmij/*
+Copyright: respective upstream authors
+License: MIT
+ The complete license text is included in the vendored crate's LICENSE-MIT
+ file.

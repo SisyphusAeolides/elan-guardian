@@ -35,17 +35,44 @@ sudo dnf copr enable sisyphuscode/elan-guardian
 sudo dnf install elan-guardian
 sudo systemctl enable --now elan-guardian-resume.service
 ```
+
+## Install on Ubuntu
+
+```bash
+sudo add-apt-repository ppa:sisyphusaeolides/corinth
+sudo apt update
+sudo apt install elan-guardian
+sudo systemctl enable --now elan-guardian-resume.service elan-guardian-watch.service
+```
+
+The package registers the optional replacement `elan_i2c` module with DKMS.
+If a kernel update cannot build that module, package configuration continues
+and the userspace resume and consumer-recovery paths remain available with the
+distribution driver.
+
 ## Install on Arch
 
 Add the Sisyphus repository to `/etc/pacman.conf`:
 
 ```ini
 [sisyphus]
-SigLevel = Optional TrustAll
+SigLevel = Required DatabaseRequired
 Server = https://sisyphusaeolides.github.io/Sisyphus-Repo/$arch
 ```
 
-Then install the userspace tools:
+Import and locally sign the repository key after independently checking its
+fingerprint:
+
+```bash
+curl --fail --location --output sisyphus-repo.asc \
+  https://raw.githubusercontent.com/SisyphusAeolides/Sisyphus-Repo/main/keys/sisyphus-repo.asc
+gpg --show-keys --with-fingerprint --keyid-format long sisyphus-repo.asc
+# Expected primary fingerprint: 2A02745D8C2C03AE7F95BCEA8136EB9238213447
+sudo pacman-key --add sisyphus-repo.asc
+sudo pacman-key --lsign-key 2A02745D8C2C03AE7F95BCEA8136EB9238213447
+```
+
+Then install the package:
 
 ```bash
 sudo pacman -Syy

@@ -1,3 +1,10 @@
+elan-guardian (0.2.11-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
+
+  * Synchronize release cycle with libinput-rs 0.3.4.
+  * No functional changes to the guardian service.
+
+ -- Kenny Glowner <SisyphusAeolides@pm.me>  Mon, 10 Aug 2026 10:20:00 -0500
+
 elan-guardian (0.2.10-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
 
   * Initial release for the Corinth PPA.

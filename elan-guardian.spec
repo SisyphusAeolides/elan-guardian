@@ -1,5 +1,5 @@
 Name:           elan-guardian
-Version:        0.2.10
+Version:        0.2.11
 Release:        1%{?dist}
 Summary:        Evidence-driven diagnostics and recovery for Elantech I2C input
 License:        GPL-2.0-only AND (Apache-2.0 OR MIT) AND (Unlicense OR MIT) AND Unicode-3.0
@@ -125,6 +125,10 @@ scripts/test-fortran.sh target/release/elan-trace-score
 %{_presetdir}/91-elan-guardian.preset
 
 %changelog
+* Mon Aug 10 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.11-1
+- Synchronize release cycle with libinput-rs 0.3.4
+- No functional changes to the guardian service
+
 * Sat Aug 08 2026 Kenny Glowner <SisyphusAeolides@pm.me> - 0.2.10-1
 - Clean optional kernel artifacts without requiring host kernel headers
 

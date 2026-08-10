@@ -8,7 +8,7 @@ CARGO_FLAGS += --offline
 endif
 
 PACKAGE_ROOT := $(CURDIR)/debian/elan-guardian
-DKMS_ROOT := $(PACKAGE_ROOT)/usr/src/elan-guardian-0.2.10
+DKMS_ROOT := $(PACKAGE_ROOT)/usr/src/elan-guardian-0.2.12
 
 %:
 	dh $@

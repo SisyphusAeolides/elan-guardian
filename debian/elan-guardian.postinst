@@ -3,12 +3,12 @@ set -e
 
 case "$1" in
     configure)
-        if ! dkms status -m elan-guardian -v 0.2.10 2>/dev/null | grep -q .; then
-            if ! dkms add -m elan-guardian -v 0.2.10; then
-                echo "elan-guardian: optional DKMS registration failed; userspace recovery remains available" >&2
+        if ! dkms status -m elan-guardian -v 0.2.12 2>/dev/null | grep -q .; then
+            if ! dkms add -m elan-guardian -v 0.2.12; then
+                echo "warning: dkms add failed, userspace recovery remains available" >&2
             fi
         fi
-        if ! dkms autoinstall -m elan-guardian -v 0.2.10; then
+        if ! dkms autoinstall -m elan-guardian -v 0.2.12; then
             echo "elan-guardian: optional DKMS build failed; using the distribution elan_i2c driver" >&2
         fi
         ;;

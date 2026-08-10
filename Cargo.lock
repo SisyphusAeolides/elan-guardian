@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "elan-guardian"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "libc",
  "serde",

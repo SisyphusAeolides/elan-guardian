@@ -1,4 +1,4 @@
-.TH ELAN-GUARDIAN 8 "August 2026" "elan-guardian 0.2.10" "System Administration"
+.TH ELAN-GUARDIAN 8 "August 2026" "elan-guardian 0.2.12" "System Administration"
 .SH NAME
 elan-guardian \- diagnose and recover Elantech I2C input controllers
 .SH SYNOPSIS
@@ -47,7 +47,7 @@ may be enabled for other validated systems with the
 firmware property.
 .PP
 The packaged source in
-.I /usr/src/elan-guardian-0.2.10/rust-shim
+.I /usr/src/elan-guardian-0.2.12/rust-shim
 builds a replacement
 .B elan_i2c.ko
 whose packet decoder, watchdog policy, and recovery state machine are written
@@ -79,7 +79,7 @@ continuously readable for 750 ms indicates that the consumer stopped draining
 it, so the service rebinds the controller. It duplicates descriptors with
 pidfd_getfd only for polling and never reads, opens, or grabs an evdev node.
 .TP
-.I /usr/src/elan-guardian-0.2.10/rust-shim
+.I /usr/src/elan-guardian-0.2.12/rust-shim
 contains the Rust-core kernel module source and external Kbuild file.
 .SH SECURITY
 The recording path opens evdev read-only and never issues EVIOCGRAB. Recovery

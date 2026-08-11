@@ -66,7 +66,14 @@ pub fn rebind_controller(sysfs_root: &Path, id: &str) -> io::Result<RecoveredCon
     }
     let driver = sysfs_root.join(DRIVER_RELATIVE_PATH);
     let canonical_driver = fs::canonicalize(&driver)?;
-    write_control(&driver.join("unbind"), id)?;
+    if sysfs_root
+        .join(DEVICES_RELATIVE_PATH)
+        .join(id)
+        .join("driver")
+        .exists()
+    {
+        write_control(&driver.join("unbind"), id)?;
+    }
     wait_until(Duration::from_secs(1), || {
         !sysfs_root
             .join(DEVICES_RELATIVE_PATH)

@@ -138,14 +138,26 @@ fn ensure_success(program: &str, output: &Output) -> io::Result<()> {
 
 fn unbind_controllers(sysfs_root: &Path, controllers: &[String]) -> io::Result<()> {
     let unbind = sysfs_root.join(DRIVER_RELATIVE_PATH).join("unbind");
+    let mut last_error = None;
     for id in controllers {
+        if !sysfs_root
+            .join(DEVICES_RELATIVE_PATH)
+            .join(id)
+            .join("driver")
+            .exists()
+        {
+            continue;
+        }
         if let Err(error) = write_control(&unbind, id) {
-            rebind_controllers(sysfs_root, controllers);
-            return Err(io::Error::new(
+            last_error = Some(io::Error::new(
                 error.kind(),
                 format!("could not unbind {id} before module activation: {error}"),
             ));
         }
+    }
+    if let Some(error) = last_error {
+        rebind_controllers(sysfs_root, controllers);
+        return Err(error);
     }
     Ok(())
 }

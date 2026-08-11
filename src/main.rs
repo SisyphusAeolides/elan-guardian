@@ -214,6 +214,11 @@ fn export_features(args: &[OsString]) -> Result<(), String> {
         u8::from(trace.expect_motion),
         u8::from(trace.cursor_stalled)
     );
+    if let Some(parent) = Path::new(output).parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+    }
     fs::write(output, row).map_err(|error| error.to_string())?;
     Ok(())
 }

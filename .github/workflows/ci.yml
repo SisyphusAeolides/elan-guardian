@@ -80,7 +80,7 @@ jobs:
         run: |
           make packaging-check
           dpkg-buildpackage --build=binary --no-sign
-          scripts/verify-deb.sh ../elan-guardian_0.2.12-1~ppa1~ubuntu26.04.1_amd64.deb
+          scripts/verify-deb.sh ../elan-guardian_0.2.13-1~ppa1~ubuntu26.04.1_amd64.deb
 
   kernel-patch:
     name: Linux ${{ matrix.kernel }} Rust-core module

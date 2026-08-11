@@ -1,4 +1,4 @@
-elan-guardian (0.2.12-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
+elan-guardian (0.2.13-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
 
   * Fix dkms.conf version mismatch for release sync.
 

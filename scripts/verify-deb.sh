@@ -10,7 +10,7 @@ package=$1
 test "$(dpkg-deb -f "$package" Package)" = elan-guardian
 version=$(dpkg-deb -f "$package" Version)
 upstream_version=${version%%-*}
-test "$upstream_version" = 0.2.13
+test "$upstream_version" = 0.2.14
 
 stage=$(mktemp -d)
 cleanup() {
@@ -40,8 +40,8 @@ test -f "$stage/DEBIAN/postinst"
 test -f "$stage/DEBIAN/prerm"
 test ! -e "$stage/usr/lib/systemd/system/elan-guardian.service"
 
-grep -q '^PACKAGE_VERSION="0.2.13"$' "$dkms_root/dkms.conf"
-grep -q 'dkms autoinstall -m elan-guardian -v 0.2.13' "$stage/DEBIAN/postinst"
+grep -q '^PACKAGE_VERSION="0.2.14"$' "$dkms_root/dkms.conf"
+grep -q 'dkms autoinstall -m elan-guardian -v 0.2.14' "$stage/DEBIAN/postinst"
 grep -q 'userspace recovery remains available' "$stage/DEBIAN/postinst"
 grep -q 'ExecStart=/usr/bin/elan-guardian watch --affected-only --interval-ms 50' \
     "$stage/usr/lib/systemd/system/elan-guardian-watch.service"

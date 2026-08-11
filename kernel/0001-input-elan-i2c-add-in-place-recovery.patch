@@ -488,7 +488,7 @@ index 752198127..8c392c80b 100644
  
  	data->vcc = devm_regulator_get(dev, "vcc");
  	if (IS_ERR(data->vcc))
-@@ -1334,10 +1579,12 @@ static int elan_suspend(struct device *dev)
+@@ -1334,8 +1579,12 @@ static int elan_suspend(struct device *dev)
  	 * complete before we attempt to bring the device into low[er]
  	 * power mode.
  	 */

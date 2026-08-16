@@ -1,0 +1,16 @@
+[Unit]
+Description=Rebind ELAN I2C touchpad after input stall or cursor freeze
+Documentation=man:elan-guardian(8)
+After=systemd-udev-settle.service elan-guardian-module.service
+Wants=elan-guardian-module.service
+
+[Service]
+Type=oneshot
+# Use elan-guardian recover with --rebind as primary path (in-place
+# kernel recovery first, then driver unbind/rebind as fallback).
+# Direct sysfs bind is the last resort when elan-guardian is unavailable.
+ExecStart=-/usr/bin/sh -c '/usr/bin/elan-guardian recover --device 13-0015 --rebind --quiet || (echo 13-0015 > /sys/bus/i2c/drivers/elan_i2c/unbind; sleep 0.3; echo 13-0015 > /sys/bus/i2c/drivers/elan_i2c/bind)'
+NoNewPrivileges=no
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/sys/bus/i2c/drivers/elan_i2c

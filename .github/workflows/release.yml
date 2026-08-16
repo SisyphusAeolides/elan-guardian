@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Install checkout prerequisite
+        run: dnf -y -q install git
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Trust mounted checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install build tools
+        run: >-
+          dnf -y -q install binutils cargo clippy cpio elfutils gcc-gfortran git make
+          ripgrep rpm-build rpmdevtools rust rustfmt systemd-rpm-macros gh
+      - name: Build release artifacts
+        run: |
+          rpm_topdir="$RUNNER_TEMP/rpmbuild"
+          make check packaging-check srpm RPM_TOPDIR="$rpm_topdir"
+          rpmbuild --rebuild "$rpm_topdir"/SRPMS/*.src.rpm --define "_topdir $rpm_topdir"
+          mkdir -p artifacts
+          cp target/dist/*.tar.gz "$rpm_topdir"/SRPMS/*.src.rpm "$rpm_topdir"/RPMS/*/*.rpm artifacts/
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --generate-notes

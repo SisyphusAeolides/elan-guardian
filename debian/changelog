@@ -1,0 +1,22 @@
+elan-guardian (0.2.15-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
+
+  * Fix dkms.conf version mismatch for release sync.
+
+ -- Kenny Glowner <SisyphusAeolides@pm.me>  Mon, 10 Aug 2026 10:25:00 -0500
+
+elan-guardian (0.2.11-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
+
+  * Synchronize release cycle with libinput-rs 0.3.4.
+  * No functional changes to the guardian service.
+
+ -- Kenny Glowner <SisyphusAeolides@pm.me>  Mon, 10 Aug 2026 10:20:00 -0500
+
+elan-guardian (0.2.10-1~ppa1~ubuntu26.04.1) resolute; urgency=medium
+
+  * Initial release for the Corinth PPA.
+  * Discover kmod tools through the cross-distribution service path.
+  * Package the userspace recovery stack and fail-open DKMS module sources.
+  * Install hardened systemd units, udev recovery rules, and manual pages.
+  * Clean source builds without requiring headers for the builder host kernel.
+
+ -- Kenny Glowner <SisyphusAeolides@pm.me>  Sat, 08 Aug 2026 00:00:00 -0500

@@ -1,0 +1,1678 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Elan I2C/SMBus Touchpad driver
+ *
+ * Copyright (c) 2013 ELAN Microelectronics Corp.
+ *
+ * Author: 林政維 (Duson Lin) <dusonlin@emc.com.tw>
+ * Author: KT Liao <kt.liao@emc.com.tw>
+ * Version: 1.6.3
+ *
+ * Based on cyapa driver:
+ * copyright (c) 2011-2012 Cypress Semiconductor, Inc.
+ * copyright (c) 2011-2012 Google, Inc.
+ *
+ * Trademarks are the property of their respective owners.
+ */
+
+#include <linux/acpi.h>
+#include <linux/delay.h>
+#include <linux/device.h>
+#include <linux/dmi.h>
+#include <linux/firmware.h>
+#include <linux/i2c.h>
+#include <linux/init.h>
+#include <linux/input/mt.h>
+#include <linux/interrupt.h>
+#include <linux/irq.h>
+#include <linux/module.h>
+#include <linux/slab.h>
+#include <linux/kernel.h>
+#include <linux/sched.h>
+#include <linux/input.h>
+#include <linux/uaccess.h>
+#include <linux/jiffies.h>
+#include <linux/completion.h>
+#include <linux/of.h>
+#include <linux/pm_wakeirq.h>
+#include <linux/property.h>
+#include <linux/regulator/consumer.h>
+#include <linux/unaligned.h>
+#include <linux/workqueue.h>
+
+#include "elan_i2c.h"
+#include "../elan_rs_shim.h"
+
+#define DRIVER_NAME		"elan_i2c"
+#define ELAN_VENDOR_ID		0x04f3
+#define ETP_MAX_PRESSURE	255
+#define ETP_FWIDTH_REDUCE	90
+#define ETP_FINGER_WIDTH	15
+#define ETP_RETRY_COUNT		3
+#define ETP_WATCHDOG_REPORT_ERRORS	3
+
+/* quirks to control the device */
+#define ETP_QUIRK_QUICK_WAKEUP	BIT(0)
+
+/* The main device structure */
+struct elan_tp_data {
+	struct i2c_client	*client;
+	struct input_dev	*input;
+	struct input_dev	*tp_input; /* trackpoint input node */
+	struct regulator	*vcc;
+
+	const struct elan_transport_ops *ops;
+
+	/* for fw update */
+	struct completion	fw_completion;
+	bool			in_fw_update;
+
+	struct mutex		sysfs_mutex;
+	struct work_struct	watchdog_work;
+	atomic_t		open_count;
+	atomic64_t		report_count;
+	unsigned int		report_errors;
+	unsigned int		watchdog_recoveries;
+	bool			watchdog_enabled;
+
+	unsigned int		max_x;
+	unsigned int		max_y;
+	unsigned int		width_x;
+	unsigned int		width_y;
+	unsigned int		x_res;
+	unsigned int		y_res;
+
+	u8			pattern;
+	u16			product_id;
+	u8			fw_version;
+	u8			sm_version;
+	u8			iap_version;
+	u16			fw_checksum;
+	unsigned int		report_features;
+	unsigned int		report_len;
+	int			pressure_adjustment;
+	u8			mode;
+	u16			ic_type;
+	u16			fw_validpage_count;
+	u16			fw_page_size;
+	u32			fw_signature_address;
+
+	u8			min_baseline;
+	u8			max_baseline;
+	bool			baseline_ready;
+	u8			clickpad;
+	bool			middle_button;
+
+	u32			quirks;		/* Various quirks */
+};
+
+static const struct dmi_system_id elan_runtime_watchdog_dmi[] = {
+	{
+		.ident = "Lenovo ThinkPad P53",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad P53"),
+		},
+	},
+	{ }
+};
+
+static u32 elan_i2c_lookup_quirks(u16 ic_type, u16 product_id)
+{
+	static const struct {
+		u16 ic_type;
+		u16 product_id;
+		u32 quirks;
+	} elan_i2c_quirks[] = {
+		{ 0x0D, ETP_PRODUCT_ID_DELBIN, ETP_QUIRK_QUICK_WAKEUP },
+		{ 0x0D, ETP_PRODUCT_ID_WHITEBOX, ETP_QUIRK_QUICK_WAKEUP },
+		{ 0x10, ETP_PRODUCT_ID_VOXEL, ETP_QUIRK_QUICK_WAKEUP },
+		{ 0x14, ETP_PRODUCT_ID_MAGPIE, ETP_QUIRK_QUICK_WAKEUP },
+		{ 0x14, ETP_PRODUCT_ID_BOBBA, ETP_QUIRK_QUICK_WAKEUP },
+	};
+	u32 quirks = 0;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(elan_i2c_quirks); i++) {
+		if (elan_i2c_quirks[i].ic_type == ic_type &&
+		    elan_i2c_quirks[i].product_id == product_id) {
+			quirks = elan_i2c_quirks[i].quirks;
+		}
+	}
+
+	if (ic_type >= 0x0D && product_id >= 0x123)
+		quirks |= ETP_QUIRK_QUICK_WAKEUP;
+
+	return quirks;
+}
+
+static int elan_get_fwinfo(u16 ic_type, u8 iap_version, u16 *validpage_count,
+			   u32 *signature_address, u16 *page_size)
+{
+	switch (ic_type) {
+	case 0x00:
+	case 0x06:
+	case 0x08:
+		*validpage_count = 512;
+		break;
+	case 0x03:
+	case 0x07:
+	case 0x09:
+	case 0x0A:
+	case 0x0B:
+	case 0x0C:
+		*validpage_count = 768;
+		break;
+	case 0x0D:
+		*validpage_count = 896;
+		break;
+	case 0x0E:
+		*validpage_count = 640;
+		break;
+	case 0x10:
+		*validpage_count = 1024;
+		break;
+	case 0x11:
+		*validpage_count = 1280;
+		break;
+	case 0x13:
+		*validpage_count = 2048;
+		break;
+	case 0x14:
+	case 0x15:
+		*validpage_count = 1024;
+		break;
+	case 0x19:
+		*validpage_count = 2032;
+		break;
+	default:
+		/* unknown ic type clear value */
+		*validpage_count = 0;
+		*signature_address = 0;
+		*page_size = 0;
+		return -ENXIO;
+	}
+
+	*signature_address =
+		(*validpage_count * ETP_FW_PAGE_SIZE) - ETP_FW_SIGNATURE_SIZE;
+
+	if ((ic_type == 0x14 || ic_type == 0x15) && iap_version >= 2) {
+		*validpage_count /= 8;
+		*page_size = ETP_FW_PAGE_SIZE_512;
+	} else if (ic_type >= 0x0D && iap_version >= 1) {
+		*validpage_count /= 2;
+		*page_size = ETP_FW_PAGE_SIZE_128;
+	} else {
+		*page_size = ETP_FW_PAGE_SIZE;
+	}
+
+	return 0;
+}
+
+static int elan_set_power(struct elan_tp_data *data, bool on)
+{
+	int repeat = ETP_RETRY_COUNT;
+	int error;
+
+	do {
+		error = data->ops->power_control(data->client, on);
+		if (error >= 0)
+			return 0;
+
+		msleep(30);
+	} while (--repeat > 0);
+
+	dev_err(&data->client->dev, "failed to set power %s: %d\n",
+		on ? "on" : "off", error);
+	return error;
+}
+
+static int elan_sleep(struct elan_tp_data *data)
+{
+	int repeat = ETP_RETRY_COUNT;
+	int error;
+
+	do {
+		error = data->ops->sleep_control(data->client, true);
+		if (!error)
+			return 0;
+
+		msleep(30);
+	} while (--repeat > 0);
+
+	return error;
+}
+
+static int elan_query_product(struct elan_tp_data *data)
+{
+	int error;
+
+	error = data->ops->get_product_id(data->client, &data->product_id);
+	if (error)
+		return error;
+
+	error = data->ops->get_pattern(data->client, &data->pattern);
+	if (error)
+		return error;
+
+	error = data->ops->get_sm_version(data->client, data->pattern,
+					  &data->ic_type, &data->sm_version,
+					  &data->clickpad);
+	if (error)
+		return error;
+
+	return 0;
+}
+
+static int elan_check_ASUS_special_fw(struct elan_tp_data *data)
+{
+	if (data->ic_type == 0x0E) {
+		switch (data->product_id) {
+		case 0x05 ... 0x07:
+		case 0x09:
+		case 0x13:
+			return true;
+		}
+	} else if (data->ic_type == 0x08 && data->product_id == 0x26) {
+		/* ASUS EeeBook X205TA */
+		return true;
+	}
+
+	return false;
+}
+
+static int __elan_initialize(struct elan_tp_data *data, bool skip_reset)
+{
+	struct i2c_client *client = data->client;
+	bool woken_up = false;
+	int error;
+
+	if (!skip_reset) {
+		error = data->ops->initialize(client);
+		if (error) {
+			dev_err(&client->dev, "device initialize failed: %d\n", error);
+			return error;
+		}
+	}
+
+	error = elan_query_product(data);
+	if (error)
+		return error;
+
+	/*
+	 * Some ASUS devices were shipped with firmware that requires
+	 * touchpads to be woken up first, before attempting to switch
+	 * them into absolute reporting mode.
+	 */
+	if (elan_check_ASUS_special_fw(data)) {
+		error = data->ops->sleep_control(client, false);
+		if (error) {
+			dev_err(&client->dev,
+				"failed to wake device up: %d\n", error);
+			return error;
+		}
+
+		msleep(200);
+		woken_up = true;
+	}
+
+	data->mode |= ETP_ENABLE_ABS;
+	error = data->ops->set_mode(client, data->mode);
+	if (error) {
+		dev_err(&client->dev,
+			"failed to switch to absolute mode: %d\n", error);
+		return error;
+	}
+
+	if (!woken_up) {
+		error = data->ops->sleep_control(client, false);
+		if (error) {
+			dev_err(&client->dev,
+				"failed to wake device up: %d\n", error);
+			return error;
+		}
+	}
+
+	return 0;
+}
+
+static int elan_initialize(struct elan_tp_data *data, bool skip_reset)
+{
+	int repeat = ETP_RETRY_COUNT;
+	int error;
+
+	do {
+		error = __elan_initialize(data, skip_reset);
+		if (!error)
+			return 0;
+
+		skip_reset = false;
+		msleep(30);
+	} while (--repeat > 0);
+
+	return error;
+}
+
+static int elan_query_device_info(struct elan_tp_data *data)
+{
+	int error;
+
+	error = data->ops->get_version(data->client, data->pattern, false,
+				       &data->fw_version);
+	if (error)
+		return error;
+
+	error = data->ops->get_checksum(data->client, false,
+					&data->fw_checksum);
+	if (error)
+		return error;
+
+	error = data->ops->get_version(data->client, data->pattern,
+				       true, &data->iap_version);
+	if (error)
+		return error;
+
+	error = data->ops->get_pressure_adjustment(data->client,
+						   &data->pressure_adjustment);
+	if (error)
+		return error;
+
+	error = data->ops->get_report_features(data->client, data->pattern,
+					       &data->report_features,
+					       &data->report_len);
+	if (error)
+		return error;
+
+	data->quirks = elan_i2c_lookup_quirks(data->ic_type, data->product_id);
+
+	error = elan_get_fwinfo(data->ic_type, data->iap_version,
+				&data->fw_validpage_count,
+				&data->fw_signature_address,
+				&data->fw_page_size);
+	if (error)
+		dev_warn(&data->client->dev,
+			 "unexpected iap version %#04x (ic type: %#04x), firmware update will not work\n",
+			 data->iap_version, data->ic_type);
+
+	return 0;
+}
+
+static unsigned int elan_convert_resolution(u8 val, u8 pattern)
+{
+	/*
+	 * pattern <= 0x01:
+	 *	(value from firmware) * 10 + 790 = dpi
+	 * else
+	 *	((value from firmware) + 3) * 100 = dpi
+	 */
+	int res = pattern <= 0x01 ?
+		(int)(char)val * 10 + 790 : ((int)(char)val + 3) * 100;
+	/*
+	 * We also have to convert dpi to dots/mm (*10/254 to avoid floating
+	 * point).
+	 */
+	return res * 10 / 254;
+}
+
+static int elan_query_device_parameters(struct elan_tp_data *data)
+{
+	struct i2c_client *client = data->client;
+	unsigned int x_traces, y_traces;
+	u32 x_mm, y_mm;
+	u8 hw_x_res, hw_y_res;
+	int error;
+
+	if (device_property_read_u32(&client->dev,
+				     "touchscreen-size-x", &data->max_x) ||
+	    device_property_read_u32(&client->dev,
+				     "touchscreen-size-y", &data->max_y)) {
+		error = data->ops->get_max(data->client,
+					   &data->max_x,
+					   &data->max_y);
+		if (error)
+			return error;
+	} else {
+		/* size is the maximum + 1 */
+		--data->max_x;
+		--data->max_y;
+	}
+
+	if (device_property_read_u32(&client->dev,
+				     "elan,x_traces",
+				     &x_traces) ||
+	    device_property_read_u32(&client->dev,
+				     "elan,y_traces",
+				     &y_traces)) {
+		error = data->ops->get_num_traces(data->client,
+						  &x_traces, &y_traces);
+		if (error)
+			return error;
+	}
+	data->width_x = data->max_x / x_traces;
+	data->width_y = data->max_y / y_traces;
+
+	if (device_property_read_u32(&client->dev,
+				     "touchscreen-x-mm", &x_mm) ||
+	    device_property_read_u32(&client->dev,
+				     "touchscreen-y-mm", &y_mm)) {
+		error = data->ops->get_resolution(data->client,
+						  &hw_x_res, &hw_y_res);
+		if (error)
+			return error;
+
+		data->x_res = elan_convert_resolution(hw_x_res, data->pattern);
+		data->y_res = elan_convert_resolution(hw_y_res, data->pattern);
+	} else {
+		data->x_res = (data->max_x + 1) / x_mm;
+		data->y_res = (data->max_y + 1) / y_mm;
+	}
+
+	if (device_property_read_bool(&client->dev, "elan,clickpad"))
+		data->clickpad = 1;
+
+	if (device_property_read_bool(&client->dev, "elan,middle-button"))
+		data->middle_button = true;
+
+	return 0;
+}
+
+/*
+ **********************************************************
+ * IAP firmware updater related routines
+ **********************************************************
+ */
+static int elan_write_fw_block(struct elan_tp_data *data, u16 page_size,
+			       const u8 *page, u16 checksum, int idx)
+{
+	int retry = ETP_RETRY_COUNT;
+	int error;
+
+	do {
+		error = data->ops->write_fw_block(data->client, page_size,
+						  page, checksum, idx);
+		if (!error)
+			return 0;
+
+		dev_dbg(&data->client->dev,
+			"IAP retrying page %d (error: %d)\n", idx, error);
+	} while (--retry > 0);
+
+	return error;
+}
+
+static int __elan_update_firmware(struct elan_tp_data *data,
+				  const struct firmware *fw)
+{
+	struct i2c_client *client = data->client;
+	struct device *dev = &client->dev;
+	int i, j;
+	int error;
+	u16 iap_start_addr;
+	u16 boot_page_count;
+	u16 sw_checksum = 0, fw_checksum = 0;
+
+	error = data->ops->prepare_fw_update(client, data->ic_type,
+					     data->iap_version,
+					     data->fw_page_size);
+	if (error)
+		return error;
+
+	iap_start_addr = get_unaligned_le16(&fw->data[ETP_IAP_START_ADDR * 2]);
+
+	boot_page_count = (iap_start_addr * 2) / data->fw_page_size;
+	for (i = boot_page_count; i < data->fw_validpage_count; i++) {
+		u16 checksum = 0;
+		const u8 *page = &fw->data[i * data->fw_page_size];
+
+		for (j = 0; j < data->fw_page_size; j += 2)
+			checksum += ((page[j + 1] << 8) | page[j]);
+
+		error = elan_write_fw_block(data, data->fw_page_size,
+					    page, checksum, i);
+		if (error) {
+			dev_err(dev, "write page %d fail: %d\n", i, error);
+			return error;
+		}
+
+		sw_checksum += checksum;
+	}
+
+	/* Wait WDT reset and power on reset */
+	msleep(600);
+
+	error = data->ops->finish_fw_update(client, &data->fw_completion);
+	if (error)
+		return error;
+
+	error = data->ops->get_checksum(client, true, &fw_checksum);
+	if (error)
+		return error;
+
+	if (sw_checksum != fw_checksum) {
+		dev_err(dev, "checksum diff sw=[%04X], fw=[%04X]\n",
+			sw_checksum, fw_checksum);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int elan_update_firmware(struct elan_tp_data *data,
+				const struct firmware *fw)
+{
+	struct i2c_client *client = data->client;
+	int retval;
+
+	dev_dbg(&client->dev, "Starting firmware update....\n");
+
+	disable_irq(client->irq);
+	data->in_fw_update = true;
+
+	retval = __elan_update_firmware(data, fw);
+	if (retval) {
+		dev_err(&client->dev, "firmware update failed: %d\n", retval);
+		data->ops->iap_reset(client);
+	} else {
+		/* Reinitialize TP after fw is updated */
+		elan_initialize(data, false);
+		elan_query_device_info(data);
+	}
+
+	data->in_fw_update = false;
+	enable_irq(client->irq);
+
+	return retval;
+}
+
+/*
+ *******************************************************************
+ * SYSFS attributes
+ *******************************************************************
+ */
+static ssize_t elan_sysfs_read_fw_checksum(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+
+	return sysfs_emit(buf, "0x%04x\n", data->fw_checksum);
+}
+
+static ssize_t elan_sysfs_read_product_id(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+
+	return sysfs_emit(buf, ETP_PRODUCT_ID_FORMAT_STRING "\n",
+			  data->product_id);
+}
+
+static ssize_t elan_sysfs_read_fw_ver(struct device *dev,
+				      struct device_attribute *attr,
+				      char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+
+	return sysfs_emit(buf, "%d.0\n", data->fw_version);
+}
+
+static ssize_t elan_sysfs_read_sm_ver(struct device *dev,
+				      struct device_attribute *attr,
+				      char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+
+	return sysfs_emit(buf, "%d.0\n", data->sm_version);
+}
+
+static ssize_t elan_sysfs_read_iap_ver(struct device *dev,
+				       struct device_attribute *attr,
+				       char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+
+	return sysfs_emit(buf, "%d.0\n", data->iap_version);
+}
+
+static ssize_t elan_sysfs_update_fw(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct elan_tp_data *data = dev_get_drvdata(dev);
+	const struct firmware *fw;
+	char *fw_name;
+	int error;
+	const u8 *fw_signature;
+	static const u8 signature[] = {0xAA, 0x55, 0xCC, 0x33, 0xFF, 0xFF};
+
+	if (data->fw_validpage_count == 0)
+		return -EINVAL;
+
+	/* Look for a firmware with the product id appended. */
+	fw_name = kasprintf(GFP_KERNEL, ETP_FW_NAME, data->product_id);
+	if (!fw_name) {
+		dev_err(dev, "failed to allocate memory for firmware name\n");
+		return -ENOMEM;
+	}
+
+	dev_info(dev, "requesting fw '%s'\n", fw_name);
+	error = request_firmware(&fw, fw_name, dev);
+	kfree(fw_name);
+	if (error) {
+		dev_err(dev, "failed to request firmware: %d\n", error);
+		return error;
+	}
+
+	if (fw->size < data->fw_signature_address + sizeof(signature)) {
+		dev_err(dev, "firmware file too small\n");
+		error = -EBADF;
+		goto out_release_fw;
+	}
+
+	/* Firmware file must match signature data */
+	fw_signature = &fw->data[data->fw_signature_address];
+	if (memcmp(fw_signature, signature, sizeof(signature)) != 0) {
+		dev_err(dev, "signature mismatch (expected %*ph, got %*ph)\n",
+			(int)sizeof(signature), signature,
+			(int)sizeof(signature), fw_signature);
+		error = -EBADF;
+		goto out_release_fw;
+	}
+
+	error = mutex_lock_interruptible(&data->sysfs_mutex);
+	if (error)
+		goto out_release_fw;
+
+	error = elan_update_firmware(data, fw);
+
+	mutex_unlock(&data->sysfs_mutex);
+
+out_release_fw:
+	release_firmware(fw);
+	return error ?: count;
+}
+
+static ssize_t calibrate_store(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+	int tries = 20;
+	int retval;
+	int error;
+	u8 val[ETP_CALIBRATE_MAX_LEN];
+
+	retval = mutex_lock_interruptible(&data->sysfs_mutex);
+	if (retval)
+		return retval;
+
+	disable_irq(client->irq);
+
+	data->mode |= ETP_ENABLE_CALIBRATE;
+	retval = data->ops->set_mode(client, data->mode);
+	if (retval) {
+		data->mode &= ~ETP_ENABLE_CALIBRATE;
+		dev_err(dev, "failed to enable calibration mode: %d\n",
+			retval);
+		goto out;
+	}
+
+	retval = data->ops->calibrate(client);
+	if (retval) {
+		dev_err(dev, "failed to start calibration: %d\n",
+			retval);
+		goto out_disable_calibrate;
+	}
+
+	val[0] = 0xff;
+	do {
+		/* Wait 250ms before checking if calibration has completed. */
+		msleep(250);
+
+		retval = data->ops->calibrate_result(client, val);
+		if (retval)
+			dev_err(dev, "failed to check calibration result: %d\n",
+				retval);
+		else if (val[0] == 0)
+			break; /* calibration done */
+
+	} while (--tries);
+
+	if (tries == 0) {
+		dev_err(dev, "failed to calibrate. Timeout.\n");
+		retval = -ETIMEDOUT;
+	}
+
+out_disable_calibrate:
+	data->mode &= ~ETP_ENABLE_CALIBRATE;
+	error = data->ops->set_mode(data->client, data->mode);
+	if (error) {
+		dev_err(dev, "failed to disable calibration mode: %d\n",
+			error);
+		if (!retval)
+			retval = error;
+	}
+out:
+	enable_irq(client->irq);
+	mutex_unlock(&data->sysfs_mutex);
+	return retval ?: count;
+}
+
+static ssize_t elan_sysfs_read_mode(struct device *dev,
+				    struct device_attribute *attr,
+				    char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+	int error;
+	enum tp_mode mode;
+
+	error = mutex_lock_interruptible(&data->sysfs_mutex);
+	if (error)
+		return error;
+
+	error = data->ops->iap_get_mode(data->client, &mode);
+
+	mutex_unlock(&data->sysfs_mutex);
+
+	if (error)
+		return error;
+
+	return sysfs_emit(buf, "%d\n", (int)mode);
+}
+
+static void elan_release_inputs(struct elan_tp_data *data)
+{
+	int i;
+
+	for (i = 0; i < ETP_MAX_FINGERS; i++) {
+		input_mt_slot(data->input, i);
+		input_mt_report_slot_inactive(data->input);
+	}
+	input_report_key(data->input, BTN_LEFT, 0);
+	input_report_key(data->input, BTN_MIDDLE, 0);
+	input_report_key(data->input, BTN_RIGHT, 0);
+	input_mt_report_pointer_emulation(data->input, true);
+	input_sync(data->input);
+
+	if (data->tp_input) {
+		input_report_key(data->tp_input, BTN_LEFT, 0);
+		input_report_key(data->tp_input, BTN_MIDDLE, 0);
+		input_report_key(data->tp_input, BTN_RIGHT, 0);
+		input_sync(data->tp_input);
+	}
+}
+
+static int elan_watchdog_ping(struct elan_tp_data *data);
+
+static int elan_recover_locked(struct elan_tp_data *data)
+{
+	u32 phase;
+	int error;
+
+	phase = elan_rs_recovery_next(ELAN_RS_RECOVERY_IDLE, 0);
+	if (phase != ELAN_RS_RECOVERY_RELEASE_INPUT)
+		return -EPROTO;
+
+	elan_release_inputs(data);
+	WRITE_ONCE(data->report_errors, 0);
+	phase = elan_rs_recovery_next(phase, 0);
+	if (phase != ELAN_RS_RECOVERY_REINITIALIZE)
+		return -EPROTO;
+
+	error = elan_initialize(data, false);
+	phase = elan_rs_recovery_next(phase, error);
+	if (phase == ELAN_RS_RECOVERY_FAILED)
+		return error;
+	if (phase != ELAN_RS_RECOVERY_VERIFY)
+		return -EPROTO;
+
+	error = elan_watchdog_ping(data);
+	phase = elan_rs_recovery_next(phase, error);
+	if (phase == ELAN_RS_RECOVERY_FAILED)
+		return error;
+	if (phase != ELAN_RS_RECOVERY_RESTORE_MODE)
+		return -EPROTO;
+
+	error = data->ops->set_mode(data->client, data->mode);
+	phase = elan_rs_recovery_next(phase, error);
+	if (phase == ELAN_RS_RECOVERY_FAILED)
+		return error;
+	if (phase != ELAN_RS_RECOVERY_COMPLETE)
+		return -EPROTO;
+
+	return 0;
+}
+
+static void elan_queue_watchdog(struct elan_tp_data *data)
+{
+	if (data->watchdog_enabled && atomic_read(&data->open_count) > 0)
+		schedule_work(&data->watchdog_work);
+}
+
+static int elan_watchdog_ping(struct elan_tp_data *data)
+{
+	int error;
+	int retry;
+
+	for (retry = 0; retry < ETP_RETRY_COUNT; retry++) {
+		error = data->ops->health_check(data->client);
+		if (!error)
+			return 0;
+		msleep(30);
+	}
+
+	return error;
+}
+
+static void elan_watchdog_work(struct work_struct *work)
+{
+	struct elan_tp_data *data =
+		container_of(work, struct elan_tp_data, watchdog_work);
+	struct device *dev = &data->client->dev;
+	u32 action;
+	int error;
+
+	mutex_lock(&data->sysfs_mutex);
+	action = elan_rs_watchdog_action(atomic_read(&data->open_count), 0,
+					 READ_ONCE(data->report_errors),
+					 ETP_WATCHDOG_REPORT_ERRORS);
+	if (action == ELAN_RS_WATCHDOG_RECOVER) {
+		disable_irq(data->client->irq);
+		dev_warn(dev,
+			 "report stream failed %u consecutive reads; recovering\n",
+			 READ_ONCE(data->report_errors));
+		error = elan_recover_locked(data);
+		if (error)
+			dev_err(dev, "automatic recovery failed: %d\n", error);
+		else
+			data->watchdog_recoveries++;
+		enable_irq(data->client->irq);
+	}
+	mutex_unlock(&data->sysfs_mutex);
+}
+
+static void elan_cancel_watchdog(void *_data)
+{
+	struct elan_tp_data *data = _data;
+
+	cancel_work_sync(&data->watchdog_work);
+}
+
+static int elan_input_open(struct input_dev *input)
+{
+	struct elan_tp_data *data = input_get_drvdata(input);
+
+	atomic_inc(&data->open_count);
+
+	return 0;
+}
+
+static void elan_input_close(struct input_dev *input)
+{
+	struct elan_tp_data *data = input_get_drvdata(input);
+
+	if (atomic_dec_and_test(&data->open_count))
+		cancel_work_sync(&data->watchdog_work);
+}
+
+static ssize_t runtime_watchdog_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct elan_tp_data *data = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf,
+			  "enabled=%u recoveries=%u reports=%lld report_errors=%u\n",
+			  data->watchdog_enabled, data->watchdog_recoveries,
+			  (long long)atomic64_read(&data->report_count),
+			  READ_ONCE(data->report_errors));
+}
+
+static ssize_t recover_store(struct device *dev,
+			     struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+	int error;
+
+	if (!sysfs_streq(buf, "1"))
+		return -EINVAL;
+
+	error = mutex_lock_interruptible(&data->sysfs_mutex);
+	if (error)
+		return error;
+
+	disable_irq(client->irq);
+	error = elan_recover_locked(data);
+	enable_irq(client->irq);
+	mutex_unlock(&data->sysfs_mutex);
+
+	if (error) {
+		dev_err(dev, "in-place recovery failed: %d\n", error);
+		return error;
+	}
+
+	dev_info(dev, "controller recovered in place\n");
+	return count;
+}
+
+static DEVICE_ATTR(product_id, S_IRUGO, elan_sysfs_read_product_id, NULL);
+static DEVICE_ATTR(firmware_version, S_IRUGO, elan_sysfs_read_fw_ver, NULL);
+static DEVICE_ATTR(sample_version, S_IRUGO, elan_sysfs_read_sm_ver, NULL);
+static DEVICE_ATTR(iap_version, S_IRUGO, elan_sysfs_read_iap_ver, NULL);
+static DEVICE_ATTR(fw_checksum, S_IRUGO, elan_sysfs_read_fw_checksum, NULL);
+static DEVICE_ATTR(mode, S_IRUGO, elan_sysfs_read_mode, NULL);
+static DEVICE_ATTR(update_fw, S_IWUSR, NULL, elan_sysfs_update_fw);
+
+static DEVICE_ATTR_WO(calibrate);
+static DEVICE_ATTR_WO(recover);
+static DEVICE_ATTR_RO(runtime_watchdog);
+
+static struct attribute *elan_sysfs_entries[] = {
+	&dev_attr_product_id.attr,
+	&dev_attr_firmware_version.attr,
+	&dev_attr_sample_version.attr,
+	&dev_attr_iap_version.attr,
+	&dev_attr_fw_checksum.attr,
+	&dev_attr_calibrate.attr,
+	&dev_attr_recover.attr,
+	&dev_attr_runtime_watchdog.attr,
+	&dev_attr_mode.attr,
+	&dev_attr_update_fw.attr,
+	NULL,
+};
+
+static const struct attribute_group elan_sysfs_group = {
+	.attrs = elan_sysfs_entries,
+};
+
+static ssize_t acquire_store(struct device *dev, struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+	int error;
+	int retval;
+
+	retval = mutex_lock_interruptible(&data->sysfs_mutex);
+	if (retval)
+		return retval;
+
+	disable_irq(client->irq);
+
+	data->baseline_ready = false;
+
+	data->mode |= ETP_ENABLE_CALIBRATE;
+	retval = data->ops->set_mode(data->client, data->mode);
+	if (retval) {
+		data->mode &= ~ETP_ENABLE_CALIBRATE;
+		dev_err(dev, "Failed to enable calibration mode to get baseline: %d\n",
+			retval);
+		goto out;
+	}
+
+	msleep(250);
+
+	retval = data->ops->get_baseline_data(data->client, true,
+					      &data->max_baseline);
+	if (retval) {
+		dev_err(dev, "Failed to read max baseline from device: %d\n",
+			retval);
+		goto out_disable_calibrate;
+	}
+
+	retval = data->ops->get_baseline_data(data->client, false,
+					      &data->min_baseline);
+	if (retval) {
+		dev_err(dev, "Failed to read min baseline from device: %d\n",
+			retval);
+		goto out_disable_calibrate;
+	}
+
+	data->baseline_ready = true;
+
+out_disable_calibrate:
+	data->mode &= ~ETP_ENABLE_CALIBRATE;
+	error = data->ops->set_mode(data->client, data->mode);
+	if (error) {
+		dev_err(dev, "Failed to disable calibration mode after acquiring baseline: %d\n",
+			error);
+		if (!retval)
+			retval = error;
+	}
+out:
+	enable_irq(client->irq);
+	mutex_unlock(&data->sysfs_mutex);
+	return retval ?: count;
+}
+
+static ssize_t min_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+	int retval;
+
+	retval = mutex_lock_interruptible(&data->sysfs_mutex);
+	if (retval)
+		return retval;
+
+	if (!data->baseline_ready) {
+		retval = -ENODATA;
+		goto out;
+	}
+
+	retval = sysfs_emit(buf, "%d", data->min_baseline);
+
+out:
+	mutex_unlock(&data->sysfs_mutex);
+	return retval;
+}
+
+static ssize_t max_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+	int retval;
+
+	retval = mutex_lock_interruptible(&data->sysfs_mutex);
+	if (retval)
+		return retval;
+
+	if (!data->baseline_ready) {
+		retval = -ENODATA;
+		goto out;
+	}
+
+	retval = sysfs_emit(buf, "%d", data->max_baseline);
+
+out:
+	mutex_unlock(&data->sysfs_mutex);
+	return retval;
+}
+
+
+static DEVICE_ATTR_WO(acquire);
+static DEVICE_ATTR_RO(min);
+static DEVICE_ATTR_RO(max);
+
+static struct attribute *elan_baseline_sysfs_entries[] = {
+	&dev_attr_acquire.attr,
+	&dev_attr_min.attr,
+	&dev_attr_max.attr,
+	NULL,
+};
+
+static const struct attribute_group elan_baseline_sysfs_group = {
+	.name = "baseline",
+	.attrs = elan_baseline_sysfs_entries,
+};
+
+static const struct attribute_group *elan_sysfs_groups[] = {
+	&elan_sysfs_group,
+	&elan_baseline_sysfs_group,
+	NULL
+};
+
+/*
+ ******************************************************************
+ * Elan isr functions
+ ******************************************************************
+ */
+static void elan_report_contact(struct elan_tp_data *data, int contact_num,
+				bool contact_valid, bool high_precision,
+				u8 *packet, u8 *finger_data)
+{
+	struct input_dev *input = data->input;
+	unsigned int pos_x, pos_y;
+	unsigned int pressure, scaled_pressure;
+
+	if (contact_valid) {
+		if (high_precision) {
+			pos_x = get_unaligned_be16(&finger_data[0]);
+			pos_y = get_unaligned_be16(&finger_data[2]);
+		} else {
+			pos_x = ((finger_data[0] & 0xf0) << 4) | finger_data[1];
+			pos_y = ((finger_data[0] & 0x0f) << 8) | finger_data[2];
+		}
+
+		if (pos_x > data->max_x || pos_y > data->max_y) {
+			dev_dbg(input->dev.parent,
+				"[%d] x=%d y=%d over max (%d, %d)",
+				contact_num, pos_x, pos_y,
+				data->max_x, data->max_y);
+			return;
+		}
+
+		pressure = finger_data[4];
+		scaled_pressure = pressure + data->pressure_adjustment;
+		if (scaled_pressure > ETP_MAX_PRESSURE)
+			scaled_pressure = ETP_MAX_PRESSURE;
+
+		input_mt_slot(input, contact_num);
+		input_mt_report_slot_state(input, MT_TOOL_FINGER, true);
+		input_report_abs(input, ABS_MT_POSITION_X, pos_x);
+		input_report_abs(input, ABS_MT_POSITION_Y, data->max_y - pos_y);
+		input_report_abs(input, ABS_MT_PRESSURE, scaled_pressure);
+
+		if (data->report_features & ETP_FEATURE_REPORT_MK) {
+			unsigned int mk_x, mk_y, area_x, area_y;
+			u8 mk_data = high_precision ?
+				packet[ETP_MK_DATA_OFFSET + contact_num] :
+				finger_data[3];
+
+			mk_x = mk_data & 0x0f;
+			mk_y = mk_data >> 4;
+
+			/*
+			 * To avoid treating large finger as palm, let's reduce
+			 * the width x and y per trace.
+			 */
+			area_x = mk_x * (data->width_x - ETP_FWIDTH_REDUCE);
+			area_y = mk_y * (data->width_y - ETP_FWIDTH_REDUCE);
+
+			input_report_abs(input, ABS_TOOL_WIDTH, mk_x);
+			input_report_abs(input, ABS_MT_TOUCH_MAJOR,
+					 max(area_x, area_y));
+			input_report_abs(input, ABS_MT_TOUCH_MINOR,
+					 min(area_x, area_y));
+		}
+	} else {
+		input_mt_slot(input, contact_num);
+		input_mt_report_slot_inactive(input);
+	}
+}
+
+static __maybe_unused void elan_report_absolute(struct elan_tp_data *data,
+						u8 *packet,
+						bool high_precision)
+{
+	struct input_dev *input = data->input;
+	u8 *finger_data = &packet[ETP_FINGER_DATA_OFFSET];
+	int i;
+	u8 tp_info = packet[ETP_TOUCH_INFO_OFFSET];
+	u8 hover_info = packet[ETP_HOVER_INFO_OFFSET];
+	bool contact_valid, hover_event;
+
+	pm_wakeup_event(&data->client->dev, 0);
+
+	hover_event = hover_info & BIT(6);
+
+	for (i = 0; i < ETP_MAX_FINGERS; i++) {
+		contact_valid = tp_info & BIT(3 + i);
+		elan_report_contact(data, i, contact_valid, high_precision,
+				    packet, finger_data);
+		if (contact_valid)
+			finger_data += ETP_FINGER_DATA_LEN;
+	}
+
+	input_report_key(input, BTN_LEFT,   tp_info & BIT(0));
+	input_report_key(input, BTN_MIDDLE, tp_info & BIT(2));
+	input_report_key(input, BTN_RIGHT,  tp_info & BIT(1));
+	input_report_abs(input, ABS_DISTANCE, hover_event != 0);
+	input_mt_report_pointer_emulation(input, true);
+	input_sync(input);
+}
+
+static __maybe_unused void elan_report_trackpoint(struct elan_tp_data *data,
+					  u8 *report)
+{
+	struct input_dev *input = data->tp_input;
+	u8 *packet = &report[ETP_REPORT_ID_OFFSET + 1];
+	int x, y;
+
+	pm_wakeup_event(&data->client->dev, 0);
+
+	if (!data->tp_input) {
+		dev_warn_once(&data->client->dev,
+			      "received a trackpoint report while no trackpoint device has been created. Please report upstream.\n");
+		return;
+	}
+
+	input_report_key(input, BTN_LEFT, packet[0] & 0x01);
+	input_report_key(input, BTN_RIGHT, packet[0] & 0x02);
+	input_report_key(input, BTN_MIDDLE, packet[0] & 0x04);
+
+	if ((packet[3] & 0x0F) == 0x06) {
+		x = packet[4] - (int)((packet[1] ^ 0x80) << 1);
+		y = (int)((packet[2] ^ 0x80) << 1) - packet[5];
+
+		input_report_rel(input, REL_X, x);
+		input_report_rel(input, REL_Y, y);
+	}
+
+	input_sync(input);
+}
+
+static irqreturn_t elan_isr(int irq, void *dev_id)
+{
+	struct elan_tp_data *data = dev_id;
+	struct elan_rs_report_context context;
+	unsigned int report_errors;
+	int error;
+	u8 report[ETP_MAX_REPORT_LEN];
+
+	/*
+	 * When device is connected to i2c bus, when all IAP page writes
+	 * complete, the driver will receive interrupt and must read
+	 * 0000 to confirm that IAP is finished.
+	*/
+	if (data->in_fw_update) {
+		complete(&data->fw_completion);
+		goto out;
+	}
+
+	error = data->ops->get_report(data->client, report, data->report_len);
+	if (error) {
+		report_errors = READ_ONCE(data->report_errors) + 1;
+		WRITE_ONCE(data->report_errors, report_errors);
+		if (data->watchdog_enabled &&
+		    elan_rs_watchdog_action(atomic_read(&data->open_count), 0,
+					    report_errors,
+					    ETP_WATCHDOG_REPORT_ERRORS) ==
+					    ELAN_RS_WATCHDOG_RECOVER)
+			elan_queue_watchdog(data);
+		goto out;
+	}
+	WRITE_ONCE(data->report_errors, 0);
+	atomic64_inc(&data->report_count);
+
+	context.dev = &data->client->dev;
+	context.touchpad = data->input;
+	context.trackpoint = data->tp_input;
+	context.max_x = data->max_x;
+	context.max_y = data->max_y;
+	context.width_x = data->width_x;
+	context.width_y = data->width_y;
+	context.pressure_adjustment = data->pressure_adjustment;
+	context.report_features = data->report_features;
+	error = elan_rs_emit_report(&context, report, data->report_len);
+	if (error && error != -ENODEV)
+		dev_err_ratelimited(&data->client->dev,
+				    "Rust report decoder rejected packet: %d\n",
+				    error);
+
+out:
+	return IRQ_HANDLED;
+}
+
+/*
+ ******************************************************************
+ * Elan initialization functions
+ ******************************************************************
+ */
+
+static int elan_setup_trackpoint_input_device(struct elan_tp_data *data)
+{
+	struct device *dev = &data->client->dev;
+	struct input_dev *input;
+
+	input = devm_input_allocate_device(dev);
+	if (!input)
+		return -ENOMEM;
+
+	input->name = "Elan TrackPoint";
+	input->id.bustype = BUS_I2C;
+	input->id.vendor = ELAN_VENDOR_ID;
+	input->id.product = data->product_id;
+	input_set_drvdata(input, data);
+	input->open = elan_input_open;
+	input->close = elan_input_close;
+
+	input_set_capability(input, EV_REL, REL_X);
+	input_set_capability(input, EV_REL, REL_Y);
+	input_set_capability(input, EV_KEY, BTN_LEFT);
+	input_set_capability(input, EV_KEY, BTN_RIGHT);
+	input_set_capability(input, EV_KEY, BTN_MIDDLE);
+
+	__set_bit(INPUT_PROP_POINTER, input->propbit);
+	__set_bit(INPUT_PROP_POINTING_STICK, input->propbit);
+
+	data->tp_input = input;
+
+	return 0;
+}
+
+static int elan_setup_input_device(struct elan_tp_data *data)
+{
+	struct device *dev = &data->client->dev;
+	struct input_dev *input;
+	unsigned int max_width = max(data->width_x, data->width_y);
+	unsigned int min_width = min(data->width_x, data->width_y);
+	int error;
+
+	input = devm_input_allocate_device(dev);
+	if (!input)
+		return -ENOMEM;
+
+	input->name = "Elan Touchpad";
+	input->id.bustype = BUS_I2C;
+	input->id.vendor = ELAN_VENDOR_ID;
+	input->id.product = data->product_id;
+	input_set_drvdata(input, data);
+	input->open = elan_input_open;
+	input->close = elan_input_close;
+
+	error = input_mt_init_slots(input, ETP_MAX_FINGERS,
+				    INPUT_MT_POINTER | INPUT_MT_DROP_UNUSED);
+	if (error) {
+		dev_err(dev, "failed to initialize MT slots: %d\n", error);
+		return error;
+	}
+
+	__set_bit(EV_ABS, input->evbit);
+	__set_bit(INPUT_PROP_POINTER, input->propbit);
+	if (data->clickpad) {
+		__set_bit(INPUT_PROP_BUTTONPAD, input->propbit);
+	} else {
+		__set_bit(BTN_RIGHT, input->keybit);
+		if (data->middle_button)
+			__set_bit(BTN_MIDDLE, input->keybit);
+	}
+	__set_bit(BTN_LEFT, input->keybit);
+
+	/* Set up ST parameters */
+	input_set_abs_params(input, ABS_X, 0, data->max_x, 0, 0);
+	input_set_abs_params(input, ABS_Y, 0, data->max_y, 0, 0);
+	input_abs_set_res(input, ABS_X, data->x_res);
+	input_abs_set_res(input, ABS_Y, data->y_res);
+	input_set_abs_params(input, ABS_PRESSURE, 0, ETP_MAX_PRESSURE, 0, 0);
+	if (data->report_features & ETP_FEATURE_REPORT_MK)
+		input_set_abs_params(input, ABS_TOOL_WIDTH,
+				     0, ETP_FINGER_WIDTH, 0, 0);
+	input_set_abs_params(input, ABS_DISTANCE, 0, 1, 0, 0);
+
+	/* And MT parameters */
+	input_set_abs_params(input, ABS_MT_POSITION_X, 0, data->max_x, 0, 0);
+	input_set_abs_params(input, ABS_MT_POSITION_Y, 0, data->max_y, 0, 0);
+	input_abs_set_res(input, ABS_MT_POSITION_X, data->x_res);
+	input_abs_set_res(input, ABS_MT_POSITION_Y, data->y_res);
+	input_set_abs_params(input, ABS_MT_PRESSURE, 0,
+			     ETP_MAX_PRESSURE, 0, 0);
+	if (data->report_features & ETP_FEATURE_REPORT_MK) {
+		input_set_abs_params(input, ABS_MT_TOUCH_MAJOR,
+				     0, ETP_FINGER_WIDTH * max_width, 0, 0);
+		input_set_abs_params(input, ABS_MT_TOUCH_MINOR,
+				     0, ETP_FINGER_WIDTH * min_width, 0, 0);
+	}
+
+	data->input = input;
+
+	return 0;
+}
+
+static void elan_disable_regulator(void *_data)
+{
+	struct elan_tp_data *data = _data;
+
+	regulator_disable(data->vcc);
+}
+
+static int elan_probe(struct i2c_client *client)
+{
+	const struct elan_transport_ops *transport_ops;
+	struct device *dev = &client->dev;
+	struct elan_tp_data *data;
+	unsigned long irqflags;
+	int error;
+
+	if (elan_rs_abi_version() != ELAN_RS_ABI_VERSION) {
+		dev_err(dev, "Rust core ABI mismatch\n");
+		return -EPROTO;
+	}
+
+	if (IS_ENABLED(CONFIG_MOUSE_ELAN_I2C_I2C) &&
+	    i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+		transport_ops = &elan_i2c_ops;
+	} else if (IS_ENABLED(CONFIG_MOUSE_ELAN_I2C_SMBUS) &&
+		   i2c_check_functionality(client->adapter,
+					   I2C_FUNC_SMBUS_BYTE_DATA |
+						I2C_FUNC_SMBUS_BLOCK_DATA |
+						I2C_FUNC_SMBUS_I2C_BLOCK)) {
+		transport_ops = &elan_smbus_ops;
+	} else {
+		dev_err(dev, "not a supported I2C/SMBus adapter\n");
+		return -EIO;
+	}
+
+	data = devm_kzalloc(dev, sizeof(struct elan_tp_data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	i2c_set_clientdata(client, data);
+
+	data->ops = transport_ops;
+	data->client = client;
+	init_completion(&data->fw_completion);
+	mutex_init(&data->sysfs_mutex);
+	INIT_WORK(&data->watchdog_work, elan_watchdog_work);
+	atomic_set(&data->open_count, 0);
+	atomic64_set(&data->report_count, 0);
+	data->watchdog_enabled =
+		device_property_read_bool(dev, "elan,runtime-watchdog") ||
+		dmi_check_system(elan_runtime_watchdog_dmi);
+
+	error = devm_add_action_or_reset(dev, elan_cancel_watchdog, data);
+	if (error)
+		return error;
+
+	data->vcc = devm_regulator_get(dev, "vcc");
+	if (IS_ERR(data->vcc))
+		return dev_err_probe(dev, PTR_ERR(data->vcc), "Failed to get 'vcc' regulator\n");
+
+	error = regulator_enable(data->vcc);
+	if (error) {
+		dev_err(dev, "Failed to enable regulator: %d\n", error);
+		return error;
+	}
+
+	error = devm_add_action_or_reset(dev, elan_disable_regulator, data);
+	if (error) {
+		dev_err(dev, "Failed to add disable regulator action: %d\n",
+			error);
+		return error;
+	}
+
+	/* Make sure there is something at this address */
+	error = i2c_smbus_read_byte(client);
+	if (error < 0) {
+		dev_dbg(&client->dev, "nothing at this address: %d\n", error);
+		return -ENXIO;
+	}
+
+	/* Initialize the touchpad. */
+	error = elan_initialize(data, false);
+	if (error)
+		return error;
+
+	error = elan_query_device_info(data);
+	if (error)
+		return error;
+
+	error = elan_query_device_parameters(data);
+	if (error)
+		return error;
+
+	dev_info(dev,
+		 "Elan Touchpad: Module ID: 0x%04x, Firmware: 0x%04x, Sample: 0x%04x, IAP: 0x%04x\n",
+		 data->product_id,
+		 data->fw_version,
+		 data->sm_version,
+		 data->iap_version);
+
+	dev_dbg(dev,
+		"Elan Touchpad Extra Information:\n"
+		"    Max ABS X,Y:   %d,%d\n"
+		"    Width X,Y:   %d,%d\n"
+		"    Resolution X,Y:   %d,%d (dots/mm)\n"
+		"    ic type: 0x%x\n"
+		"    info pattern: 0x%x\n",
+		data->max_x, data->max_y,
+		data->width_x, data->width_y,
+		data->x_res, data->y_res,
+		data->ic_type, data->pattern);
+
+	/* Set up input device properties based on queried parameters. */
+	error = elan_setup_input_device(data);
+	if (error)
+		return error;
+
+	if (device_property_read_bool(&client->dev, "elan,trackpoint")) {
+		error = elan_setup_trackpoint_input_device(data);
+		if (error)
+			return error;
+	}
+
+	/*
+	 * Platform code (ACPI, DTS) should normally set up interrupt
+	 * for us, but in case it did not let's fall back to using falling
+	 * edge to be compatible with older Chromebooks.
+	 */
+	irqflags = irq_get_trigger_type(client->irq);
+	if (!irqflags)
+		irqflags = IRQF_TRIGGER_FALLING;
+
+	error = devm_request_threaded_irq(dev, client->irq, NULL, elan_isr,
+					  irqflags | IRQF_ONESHOT,
+					  client->name, data);
+	if (error) {
+		dev_err(dev, "cannot register irq=%d\n", client->irq);
+		return error;
+	}
+
+	error = input_register_device(data->input);
+	if (error) {
+		dev_err(dev, "failed to register input device: %d\n", error);
+		return error;
+	}
+
+	if (data->tp_input) {
+		error = input_register_device(data->tp_input);
+		if (error) {
+			dev_err(&client->dev,
+				"failed to register TrackPoint input device: %d\n",
+				error);
+			return error;
+		}
+	}
+
+	return 0;
+}
+
+static int elan_suspend(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+	int ret;
+
+	/*
+	 * We are taking the mutex to make sure sysfs operations are
+	 * complete before we attempt to bring the device into low[er]
+	 * power mode.
+	 */
+	cancel_work_sync(&data->watchdog_work);
+	ret = mutex_lock_interruptible(&data->sysfs_mutex);
+	if (ret)
+		return ret;
+
+	disable_irq(client->irq);
+
+	if (device_may_wakeup(dev)) {
+		ret = elan_sleep(data);
+	} else {
+		ret = elan_set_power(data, false);
+		if (ret)
+			goto err;
+
+		ret = regulator_disable(data->vcc);
+		if (ret) {
+			dev_err(dev, "error %d disabling regulator\n", ret);
+			/* Attempt to power the chip back up */
+			elan_set_power(data, true);
+		}
+	}
+
+err:
+	if (ret)
+		enable_irq(client->irq);
+	mutex_unlock(&data->sysfs_mutex);
+	return ret;
+}
+
+static int elan_resume(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct elan_tp_data *data = i2c_get_clientdata(client);
+	int error;
+
+	if (!device_may_wakeup(dev)) {
+		error = regulator_enable(data->vcc);
+		if (error) {
+			dev_err(dev, "error %d enabling regulator\n", error);
+			goto err;
+		}
+	}
+
+	error = elan_set_power(data, true);
+	if (error) {
+		dev_err(dev, "power up when resuming failed: %d\n", error);
+		goto err;
+	}
+
+	error = elan_initialize(data, data->quirks & ETP_QUIRK_QUICK_WAKEUP);
+	if (error)
+		dev_err(dev, "initialize when resuming failed: %d\n", error);
+
+err:
+	enable_irq(data->client->irq);
+	return error;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(elan_pm_ops, elan_suspend, elan_resume);
+
+static const struct i2c_device_id elan_id[] = {
+	{ DRIVER_NAME },
+	{ }
+};
+MODULE_DEVICE_TABLE(i2c, elan_id);
+
+#ifdef CONFIG_ACPI
+#include <linux/input/elan-i2c-ids.h>
+MODULE_DEVICE_TABLE(acpi, elan_acpi_id);
+#endif
+
+#ifdef CONFIG_OF
+static const struct of_device_id elan_of_match[] = {
+	{ .compatible = "elan,ekth3000" },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, elan_of_match);
+#endif
+
+static struct i2c_driver elan_driver = {
+	.driver = {
+		.name	= DRIVER_NAME,
+		.pm	= pm_sleep_ptr(&elan_pm_ops),
+		.acpi_match_table = ACPI_PTR(elan_acpi_id),
+		.of_match_table = of_match_ptr(elan_of_match),
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
+		.dev_groups = elan_sysfs_groups,
+	},
+	.probe		= elan_probe,
+	.id_table	= elan_id,
+};
+
+module_i2c_driver(elan_driver);
+
+MODULE_AUTHOR("Duson Lin <dusonlin@emc.com.tw>");
+MODULE_DESCRIPTION("Elan I2C/SMBus Touchpad driver");
+MODULE_LICENSE("GPL");

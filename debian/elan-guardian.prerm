@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        dkms remove -m elan-guardian -v 0.2.15 --all || true
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

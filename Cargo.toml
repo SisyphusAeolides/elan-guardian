@@ -1,0 +1,42 @@
+[package]
+name = "elan-guardian"
+version = "0.2.15"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Kenny Glowner <SisyphusAeolides@pm.me>"]
+description = "Evidence-driven diagnostics and recovery for Elantech I2C input controllers"
+license = "GPL-2.0-only"
+repository = "https://github.com/SisyphusAeolides/elan-guardian"
+homepage = "https://github.com/SisyphusAeolides/elan-guardian"
+documentation = "https://docs.rs/elan-guardian"
+readme = "README.md"
+keywords = ["linux", "elantech", "i2c", "input", "diagnostics"]
+categories = ["command-line-utilities", "hardware-support", "os::linux-apis"]
+include = [
+    "src/**",
+    "tests/**",
+    "kernel/0001-input-elan-i2c-add-in-place-recovery.patch",
+    "kernel/rust-shim/Makefile",
+    "kernel/rust-shim/README.md",
+    "kernel/rust-shim/UPSTREAM",
+    "kernel/rust-shim/*.rs",
+    "kernel/rust-shim/*.c",
+    "kernel/rust-shim/*.h",
+    "kernel/rust-shim/upstream/*.c",
+    "kernel/rust-shim/upstream/*.h",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE",
+    "dkms.conf",
+]
+
+[dependencies]
+libc = "0.2.155"
+serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.117"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

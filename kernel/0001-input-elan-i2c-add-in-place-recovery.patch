@@ -1,0 +1,567 @@
+From 649768f4af29060b01965cf07a234def766c8875 Mon Sep 17 00:00:00 2001
+From: Kenny Glowner <SisyphusAeolides@pm.me>
+Date: Thu, 30 Jul 2026 08:33:11 -0500
+Subject: [PATCH] Input: elan_i2c - recover stalled controllers in place
+
+Some Elantech controllers remain registered after a report-stream fault but
+stop delivering usable input. Driver unbind and bind recovers the controller,
+but replaces its input devices and invalidates userspace file descriptors.
+
+Add a root-writable recovery attribute and an opt-in report-driven watchdog.
+The watchdog is enabled by default on the Lenovo ThinkPad P53, runs only while
+an input node is open, and recovers after three consecutive report-read
+errors. It performs no periodic controller I/O, so healthy active and idle
+controllers are untouched. Export successful report and error counts for
+userspace diagnostics.
+
+Release active input state before recovery and retain the registered input
+objects throughout. Serialize recovery with firmware, calibration, suspend,
+and resume operations. Include the substantive ELAN fixes through Linux 7.1
+while retaining source compatibility with Linux 6.12.
+
+Signed-off-by: Kenny Glowner <SisyphusAeolides@pm.me>
+---
+ drivers/input/mouse/elan_i2c.h       |   1 +
+ drivers/input/mouse/elan_i2c_core.c  | 288 ++++++++++++++++++++++++++++++++---
+ drivers/input/mouse/elan_i2c_i2c.c   |  10 +-
+ drivers/input/mouse/elan_i2c_smbus.c |   6 +
+ 4 files changed, 283 insertions(+), 22 deletions(-)
+
+diff --git a/drivers/input/mouse/elan_i2c.h b/drivers/input/mouse/elan_i2c.h
+index 3c84deefa..a5feef48b 100644
+--- a/drivers/input/mouse/elan_i2c.h
++++ b/drivers/input/mouse/elan_i2c.h
+@@ -74,6 +74,7 @@ struct elan_transport_ops {
+ 	int (*sleep_control)(struct i2c_client *, bool sleep);
+ 	int (*power_control)(struct i2c_client *, bool enable);
+ 	int (*set_mode)(struct i2c_client *client, u8 mode);
++	int (*health_check)(struct i2c_client *client);
+ 
+ 	int (*calibrate)(struct i2c_client *client);
+ 	int (*calibrate_result)(struct i2c_client *client, u8 *val);
+diff --git a/drivers/input/mouse/elan_i2c_core.c b/drivers/input/mouse/elan_i2c_core.c
+index 752198127..8c392c80b 100644
+--- a/drivers/input/mouse/elan_i2c_core.c
++++ b/drivers/input/mouse/elan_i2c_core.c
+@@ -18,6 +18,7 @@
+ #include <linux/acpi.h>
+ #include <linux/delay.h>
+ #include <linux/device.h>
++#include <linux/dmi.h>
+ #include <linux/firmware.h>
+ #include <linux/i2c.h>
+ #include <linux/init.h>
+@@ -37,8 +38,10 @@
+ #include <linux/property.h>
+ #include <linux/regulator/consumer.h>
+ #include <linux/unaligned.h>
++#include <linux/workqueue.h>
+ 
+ #include "elan_i2c.h"
++#include "../elan_rs_shim.h"
+ 
+ #define DRIVER_NAME		"elan_i2c"
+ #define ELAN_VENDOR_ID		0x04f3
+@@ -46,6 +49,7 @@
+ #define ETP_FWIDTH_REDUCE	90
+ #define ETP_FINGER_WIDTH	15
+ #define ETP_RETRY_COUNT		3
++#define ETP_WATCHDOG_REPORT_ERRORS	3
+ 
+ /* quirks to control the device */
+ #define ETP_QUIRK_QUICK_WAKEUP	BIT(0)
+@@ -64,6 +68,12 @@ struct elan_tp_data {
+ 	bool			in_fw_update;
+ 
+ 	struct mutex		sysfs_mutex;
++	struct work_struct	watchdog_work;
++	atomic_t		open_count;
++	atomic64_t		report_count;
++	unsigned int		report_errors;
++	unsigned int		watchdog_recoveries;
++	bool			watchdog_enabled;
+ 
+ 	unsigned int		max_x;
+ 	unsigned int		max_y;
+@@ -96,6 +106,17 @@ struct elan_tp_data {
+ 	u32			quirks;		/* Various quirks */
+ };
+ 
++static const struct dmi_system_id elan_runtime_watchdog_dmi[] = {
++	{
++		.ident = "Lenovo ThinkPad P53",
++		.matches = {
++			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
++			DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad P53"),
++		},
++	},
++	{ }
++};
++
+ static u32 elan_i2c_lookup_quirks(u16 ic_type, u16 product_id)
+ {
+ 	static const struct {
+@@ -161,6 +182,9 @@ static int elan_get_fwinfo(u16 ic_type, u8 iap_version, u16 *validpage_count,
+ 	case 0x15:
+ 		*validpage_count = 1024;
+ 		break;
++	case 0x19:
++		*validpage_count = 2032;
++		break;
+ 	default:
+ 		/* unknown ic type clear value */
+ 		*validpage_count = 0;
+@@ -645,6 +669,12 @@ static ssize_t elan_sysfs_update_fw(struct device *dev,
+ 		return error;
+ 	}
+ 
++	if (fw->size < data->fw_signature_address + sizeof(signature)) {
++		dev_err(dev, "firmware file too small\n");
++		error = -EBADF;
++		goto out_release_fw;
++	}
++
+ 	/* Firmware file must match signature data */
+ 	fw_signature = &fw->data[data->fw_signature_address];
+ 	if (memcmp(fw_signature, signature, sizeof(signature)) != 0) {
+@@ -688,6 +718,7 @@ static ssize_t calibrate_store(struct device *dev,
+ 	data->mode |= ETP_ENABLE_CALIBRATE;
+ 	retval = data->ops->set_mode(client, data->mode);
+ 	if (retval) {
++		data->mode &= ~ETP_ENABLE_CALIBRATE;
+ 		dev_err(dev, "failed to enable calibration mode: %d\n",
+ 			retval);
+ 		goto out;
+@@ -757,6 +788,182 @@ static ssize_t elan_sysfs_read_mode(struct device *dev,
+ 	return sysfs_emit(buf, "%d\n", (int)mode);
+ }
+ 
++static void elan_release_inputs(struct elan_tp_data *data)
++{
++	int i;
++
++	for (i = 0; i < ETP_MAX_FINGERS; i++) {
++		input_mt_slot(data->input, i);
++		input_mt_report_slot_inactive(data->input);
++	}
++	input_report_key(data->input, BTN_LEFT, 0);
++	input_report_key(data->input, BTN_MIDDLE, 0);
++	input_report_key(data->input, BTN_RIGHT, 0);
++	input_mt_report_pointer_emulation(data->input, true);
++	input_sync(data->input);
++
++	if (data->tp_input) {
++		input_report_key(data->tp_input, BTN_LEFT, 0);
++		input_report_key(data->tp_input, BTN_MIDDLE, 0);
++		input_report_key(data->tp_input, BTN_RIGHT, 0);
++		input_sync(data->tp_input);
++	}
++}
++
++static int elan_watchdog_ping(struct elan_tp_data *data);
++
++static int elan_recover_locked(struct elan_tp_data *data)
++{
++	u32 phase;
++	int error;
++
++	phase = elan_rs_recovery_next(ELAN_RS_RECOVERY_IDLE, 0);
++	if (phase != ELAN_RS_RECOVERY_RELEASE_INPUT)
++		return -EPROTO;
++
++	elan_release_inputs(data);
++	WRITE_ONCE(data->report_errors, 0);
++	phase = elan_rs_recovery_next(phase, 0);
++	if (phase != ELAN_RS_RECOVERY_REINITIALIZE)
++		return -EPROTO;
++
++	error = elan_initialize(data, false);
++	phase = elan_rs_recovery_next(phase, error);
++	if (phase == ELAN_RS_RECOVERY_FAILED)
++		return error;
++	if (phase != ELAN_RS_RECOVERY_VERIFY)
++		return -EPROTO;
++
++	error = elan_watchdog_ping(data);
++	phase = elan_rs_recovery_next(phase, error);
++	if (phase == ELAN_RS_RECOVERY_FAILED)
++		return error;
++	if (phase != ELAN_RS_RECOVERY_RESTORE_MODE)
++		return -EPROTO;
++
++	error = data->ops->set_mode(data->client, data->mode);
++	phase = elan_rs_recovery_next(phase, error);
++	if (phase == ELAN_RS_RECOVERY_FAILED)
++		return error;
++	if (phase != ELAN_RS_RECOVERY_COMPLETE)
++		return -EPROTO;
++
++	return 0;
++}
++
++static void elan_queue_watchdog(struct elan_tp_data *data)
++{
++	if (data->watchdog_enabled && atomic_read(&data->open_count) > 0)
++		schedule_work(&data->watchdog_work);
++}
++
++static int elan_watchdog_ping(struct elan_tp_data *data)
++{
++	int error;
++	int retry;
++
++	for (retry = 0; retry < ETP_RETRY_COUNT; retry++) {
++		error = data->ops->health_check(data->client);
++		if (!error)
++			return 0;
++		msleep(30);
++	}
++
++	return error;
++}
++
++static void elan_watchdog_work(struct work_struct *work)
++{
++	struct elan_tp_data *data =
++		container_of(work, struct elan_tp_data, watchdog_work);
++	struct device *dev = &data->client->dev;
++	u32 action;
++	int error;
++
++	mutex_lock(&data->sysfs_mutex);
++	action = elan_rs_watchdog_action(atomic_read(&data->open_count), 0,
++					 READ_ONCE(data->report_errors),
++					 ETP_WATCHDOG_REPORT_ERRORS);
++	if (action == ELAN_RS_WATCHDOG_RECOVER) {
++		disable_irq(data->client->irq);
++		dev_warn(dev,
++			 "report stream failed %u consecutive reads; recovering\n",
++			 READ_ONCE(data->report_errors));
++		error = elan_recover_locked(data);
++		if (error)
++			dev_err(dev, "automatic recovery failed: %d\n", error);
++		else
++			data->watchdog_recoveries++;
++		enable_irq(data->client->irq);
++	}
++	mutex_unlock(&data->sysfs_mutex);
++}
++
++static void elan_cancel_watchdog(void *_data)
++{
++	struct elan_tp_data *data = _data;
++
++	cancel_work_sync(&data->watchdog_work);
++}
++
++static int elan_input_open(struct input_dev *input)
++{
++	struct elan_tp_data *data = input_get_drvdata(input);
++
++	atomic_inc(&data->open_count);
++
++	return 0;
++}
++
++static void elan_input_close(struct input_dev *input)
++{
++	struct elan_tp_data *data = input_get_drvdata(input);
++
++	if (atomic_dec_and_test(&data->open_count))
++		cancel_work_sync(&data->watchdog_work);
++}
++
++static ssize_t runtime_watchdog_show(struct device *dev,
++				     struct device_attribute *attr, char *buf)
++{
++	struct elan_tp_data *data = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf,
++			  "enabled=%u recoveries=%u reports=%lld report_errors=%u\n",
++			  data->watchdog_enabled, data->watchdog_recoveries,
++			  (long long)atomic64_read(&data->report_count),
++			  READ_ONCE(data->report_errors));
++}
++
++static ssize_t recover_store(struct device *dev,
++			     struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct i2c_client *client = to_i2c_client(dev);
++	struct elan_tp_data *data = i2c_get_clientdata(client);
++	int error;
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++
++	error = mutex_lock_interruptible(&data->sysfs_mutex);
++	if (error)
++		return error;
++
++	disable_irq(client->irq);
++	error = elan_recover_locked(data);
++	enable_irq(client->irq);
++	mutex_unlock(&data->sysfs_mutex);
++
++	if (error) {
++		dev_err(dev, "in-place recovery failed: %d\n", error);
++		return error;
++	}
++
++	dev_info(dev, "controller recovered in place\n");
++	return count;
++}
++
+ static DEVICE_ATTR(product_id, S_IRUGO, elan_sysfs_read_product_id, NULL);
+ static DEVICE_ATTR(firmware_version, S_IRUGO, elan_sysfs_read_fw_ver, NULL);
+ static DEVICE_ATTR(sample_version, S_IRUGO, elan_sysfs_read_sm_ver, NULL);
+@@ -766,6 +973,8 @@ static DEVICE_ATTR(mode, S_IRUGO, elan_sysfs_read_mode, NULL);
+ static DEVICE_ATTR(update_fw, S_IWUSR, NULL, elan_sysfs_update_fw);
+ 
+ static DEVICE_ATTR_WO(calibrate);
++static DEVICE_ATTR_WO(recover);
++static DEVICE_ATTR_RO(runtime_watchdog);
+ 
+ static struct attribute *elan_sysfs_entries[] = {
+ 	&dev_attr_product_id.attr,
+@@ -774,6 +983,8 @@ static struct attribute *elan_sysfs_entries[] = {
+ 	&dev_attr_iap_version.attr,
+ 	&dev_attr_fw_checksum.attr,
+ 	&dev_attr_calibrate.attr,
++	&dev_attr_recover.attr,
++	&dev_attr_runtime_watchdog.attr,
+ 	&dev_attr_mode.attr,
+ 	&dev_attr_update_fw.attr,
+ 	NULL,
+@@ -802,6 +1013,7 @@ static ssize_t acquire_store(struct device *dev, struct device_attribute *attr,
+ 	data->mode |= ETP_ENABLE_CALIBRATE;
+ 	retval = data->ops->set_mode(data->client, data->mode);
+ 	if (retval) {
++		data->mode &= ~ETP_ENABLE_CALIBRATE;
+ 		dev_err(dev, "Failed to enable calibration mode to get baseline: %d\n",
+ 			retval);
+ 		goto out;
+@@ -812,7 +1024,7 @@ static ssize_t acquire_store(struct device *dev, struct device_attribute *attr,
+ 	retval = data->ops->get_baseline_data(data->client, true,
+ 					      &data->max_baseline);
+ 	if (retval) {
+-		dev_err(dev, "Failed to read max baseline form device: %d\n",
++		dev_err(dev, "Failed to read max baseline from device: %d\n",
+ 			retval);
+ 		goto out_disable_calibrate;
+ 	}
+@@ -820,7 +1032,7 @@ static ssize_t acquire_store(struct device *dev, struct device_attribute *attr,
+ 	retval = data->ops->get_baseline_data(data->client, false,
+ 					      &data->min_baseline);
+ 	if (retval) {
+-		dev_err(dev, "Failed to read min baseline form device: %d\n",
++		dev_err(dev, "Failed to read min baseline from device: %d\n",
+ 			retval);
+ 		goto out_disable_calibrate;
+ 	}
+@@ -980,8 +1192,9 @@ static void elan_report_contact(struct elan_tp_data *data, int contact_num,
+ 	}
+ }
+ 
+-static void elan_report_absolute(struct elan_tp_data *data, u8 *packet,
+-				 bool high_precision)
++static __maybe_unused void elan_report_absolute(struct elan_tp_data *data,
++						u8 *packet,
++						bool high_precision)
+ {
+ 	struct input_dev *input = data->input;
+ 	u8 *finger_data = &packet[ETP_FINGER_DATA_OFFSET];
+@@ -1010,7 +1223,8 @@ static void elan_report_absolute(struct elan_tp_data *data, u8 *packet,
+ 	input_sync(input);
+ }
+ 
+-static void elan_report_trackpoint(struct elan_tp_data *data, u8 *report)
++static __maybe_unused void elan_report_trackpoint(struct elan_tp_data *data,
++					  u8 *report)
+ {
+ 	struct input_dev *input = data->tp_input;
+ 	u8 *packet = &report[ETP_REPORT_ID_OFFSET + 1];
+@@ -1042,6 +1256,8 @@ static void elan_report_trackpoint(struct elan_tp_data *data, u8 *report)
+ static irqreturn_t elan_isr(int irq, void *dev_id)
+ {
+ 	struct elan_tp_data *data = dev_id;
++	struct elan_rs_report_context context;
++	unsigned int report_errors;
+ 	int error;
+ 	u8 report[ETP_MAX_REPORT_LEN];
+ 
+@@ -1056,24 +1272,34 @@ static irqreturn_t elan_isr(int irq, void *dev_id)
+ 	}
+ 
+ 	error = data->ops->get_report(data->client, report, data->report_len);
+-	if (error)
++	if (error) {
++		report_errors = READ_ONCE(data->report_errors) + 1;
++		WRITE_ONCE(data->report_errors, report_errors);
++		if (data->watchdog_enabled &&
++		    elan_rs_watchdog_action(atomic_read(&data->open_count), 0,
++					    report_errors,
++					    ETP_WATCHDOG_REPORT_ERRORS) ==
++					    ELAN_RS_WATCHDOG_RECOVER)
++			elan_queue_watchdog(data);
+ 		goto out;
+-
+-	switch (report[ETP_REPORT_ID_OFFSET]) {
+-	case ETP_REPORT_ID:
+-		elan_report_absolute(data, report, false);
+-		break;
+-	case ETP_REPORT_ID2:
+-		elan_report_absolute(data, report, true);
+-		break;
+-	case ETP_TP_REPORT_ID:
+-	case ETP_TP_REPORT_ID2:
+-		elan_report_trackpoint(data, report);
+-		break;
+-	default:
+-		dev_err(&data->client->dev, "invalid report id data (%x)\n",
+-			report[ETP_REPORT_ID_OFFSET]);
+ 	}
++	WRITE_ONCE(data->report_errors, 0);
++	atomic64_inc(&data->report_count);
++
++	context.dev = &data->client->dev;
++	context.touchpad = data->input;
++	context.trackpoint = data->tp_input;
++	context.max_x = data->max_x;
++	context.max_y = data->max_y;
++	context.width_x = data->width_x;
++	context.width_y = data->width_y;
++	context.pressure_adjustment = data->pressure_adjustment;
++	context.report_features = data->report_features;
++	error = elan_rs_emit_report(&context, report, data->report_len);
++	if (error && error != -ENODEV)
++		dev_err_ratelimited(&data->client->dev,
++				    "Rust report decoder rejected packet: %d\n",
++				    error);
+ 
+ out:
+ 	return IRQ_HANDLED;
+@@ -1099,6 +1325,8 @@ static int elan_setup_trackpoint_input_device(struct elan_tp_data *data)
+ 	input->id.vendor = ELAN_VENDOR_ID;
+ 	input->id.product = data->product_id;
+ 	input_set_drvdata(input, data);
++	input->open = elan_input_open;
++	input->close = elan_input_close;
+ 
+ 	input_set_capability(input, EV_REL, REL_X);
+ 	input_set_capability(input, EV_REL, REL_Y);
+@@ -1131,6 +1359,8 @@ static int elan_setup_input_device(struct elan_tp_data *data)
+ 	input->id.vendor = ELAN_VENDOR_ID;
+ 	input->id.product = data->product_id;
+ 	input_set_drvdata(input, data);
++	input->open = elan_input_open;
++	input->close = elan_input_close;
+ 
+ 	error = input_mt_init_slots(input, ETP_MAX_FINGERS,
+ 				    INPUT_MT_POINTER | INPUT_MT_DROP_UNUSED);
+@@ -1195,6 +1425,11 @@ static int elan_probe(struct i2c_client *client)
+ 	unsigned long irqflags;
+ 	int error;
+ 
++	if (elan_rs_abi_version() != ELAN_RS_ABI_VERSION) {
++		dev_err(dev, "Rust core ABI mismatch\n");
++		return -EPROTO;
++	}
++
+ 	if (IS_ENABLED(CONFIG_MOUSE_ELAN_I2C_I2C) &&
+ 	    i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+ 		transport_ops = &elan_i2c_ops;
+@@ -1219,6 +1454,16 @@ static int elan_probe(struct i2c_client *client)
+ 	data->client = client;
+ 	init_completion(&data->fw_completion);
+ 	mutex_init(&data->sysfs_mutex);
++	INIT_WORK(&data->watchdog_work, elan_watchdog_work);
++	atomic_set(&data->open_count, 0);
++	atomic64_set(&data->report_count, 0);
++	data->watchdog_enabled =
++		device_property_read_bool(dev, "elan,runtime-watchdog") ||
++		dmi_check_system(elan_runtime_watchdog_dmi);
++
++	error = devm_add_action_or_reset(dev, elan_cancel_watchdog, data);
++	if (error)
++		return error;
+ 
+ 	data->vcc = devm_regulator_get(dev, "vcc");
+ 	if (IS_ERR(data->vcc))
+@@ -1334,10 +1579,14 @@ static int elan_suspend(struct device *dev)
+ 	 * complete before we attempt to bring the device into low[er]
+ 	 * power mode.
+ 	 */
++	disable_irq(client->irq);
++	cancel_work_sync(&data->watchdog_work);
++
+ 	ret = mutex_lock_interruptible(&data->sysfs_mutex);
+-	if (ret)
++	if (ret) {
++		enable_irq(client->irq);
+ 		return ret;
++	}
+ 
+-	disable_irq(client->irq);
+ 
+ 	if (device_may_wakeup(dev)) {
+diff --git a/drivers/input/mouse/elan_i2c_i2c.c b/drivers/input/mouse/elan_i2c_i2c.c
+index 15cf4463b..5949ea05a 100644
+--- a/drivers/input/mouse/elan_i2c_i2c.c
++++ b/drivers/input/mouse/elan_i2c_i2c.c
+@@ -136,6 +136,13 @@ static int elan_i2c_write_cmd(struct i2c_client *client, u16 reg, u16 cmd)
+ 	return 0;
+ }
+ 
++static int elan_i2c_health_check(struct i2c_client *client)
++{
++	u8 val[ETP_I2C_INF_LENGTH];
++
++	return elan_i2c_read_cmd(client, ETP_I2C_FW_VERSION_CMD, val);
++}
++
+ static int elan_i2c_initialize(struct i2c_client *client)
+ {
+ 	struct device *dev = &client->dev;
+@@ -694,7 +701,7 @@ static int elan_i2c_finish_fw_update(struct i2c_client *client,
+ 	if (error) {
+ 		dev_err(dev, "device reset failed: %d\n", error);
+ 	} else if (!wait_for_completion_timeout(completion,
+-						msecs_to_jiffies(300))) {
++						msecs_to_jiffies(700))) {
+ 		dev_err(dev, "timeout waiting for device reset\n");
+ 		error = -ETIMEDOUT;
+ 	}
+@@ -751,6 +758,7 @@ const struct elan_transport_ops elan_i2c_ops = {
+ 	.sleep_control		= elan_i2c_sleep_control,
+ 	.power_control		= elan_i2c_power_control,
+ 	.set_mode		= elan_i2c_set_mode,
++	.health_check		= elan_i2c_health_check,
+ 
+ 	.calibrate		= elan_i2c_calibrate,
+ 	.calibrate_result	= elan_i2c_calibrate_result,
+diff --git a/drivers/input/mouse/elan_i2c_smbus.c b/drivers/input/mouse/elan_i2c_smbus.c
+index 6dc148b9d..f453922eb 100644
+--- a/drivers/input/mouse/elan_i2c_smbus.c
++++ b/drivers/input/mouse/elan_i2c_smbus.c
+@@ -91,6 +91,11 @@ static int elan_smbus_set_mode(struct i2c_client *client, u8 mode)
+ 					  sizeof(cmd), cmd);
+ }
+ 
++static int elan_smbus_health_check(struct i2c_client *client)
++{
++	return i2c_smbus_write_byte(client, ETP_SMBUS_ENABLE_TP);
++}
++
+ static int elan_smbus_sleep_control(struct i2c_client *client, bool sleep)
+ {
+ 	if (sleep)
+@@ -529,6 +534,7 @@ const struct elan_transport_ops elan_smbus_ops = {
+ 	.sleep_control		= elan_smbus_sleep_control,
+ 	.power_control		= elan_smbus_power_control,
+ 	.set_mode		= elan_smbus_set_mode,
++	.health_check		= elan_smbus_health_check,
+ 
+ 	.calibrate		= elan_smbus_calibrate,
+ 	.calibrate_result	= elan_smbus_calibrate_result,
+
